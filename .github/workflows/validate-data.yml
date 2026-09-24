@@ -1,0 +1,91 @@
+# Caminho no repositório: .github/workflows/validate-data.yml
+# SwissMarket Pulse — valida sintaxe e schema dos arquivos em /data
+
+name: Validate Data
+
+on:
+  push:
+    paths:
+      - "data/**"
+      - ".github/workflows/validate-data.yml"
+  pull_request:
+    paths:
+      - "data/**"
+  workflow_dispatch:        # permite rodar manualmente pela aba Actions
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validar products.json e history.json
+        run: |
+          node -e '
+          const fs = require("fs");
+          const erros = [];
+          const MODOS = ["auction", "buynow"];
+
+          // ---------- products.json (obrigatório) ----------
+          let d;
+          try {
+            d = JSON.parse(fs.readFileSync("data/products.json", "utf8"));
+          } catch (e) {
+            console.error("ERRO: products.json ausente ou com JSON inválido -> " + e.message);
+            process.exit(1);
+          }
+
+          if (typeof d.updatedAt !== "string" || isNaN(Date.parse(d.updatedAt)))
+            erros.push("updatedAt ausente ou não é uma data ISO válida");
+          if (!Array.isArray(d.products) || d.products.length === 0)
+            erros.push("products precisa ser uma lista com pelo menos 1 item");
+
+          const ids = new Set();
+          (d.products || []).forEach((p, i) => {
+            const tag = "products[" + i + "] (" + (p.id || "sem id") + ")";
+            if (!p.id || typeof p.id !== "string") erros.push(tag + ": id ausente");
+            if (ids.has(p.id)) erros.push(tag + ": id duplicado");
+            ids.add(p.id);
+            if (!p.name || typeof p.name !== "string") erros.push(tag + ": name ausente");
+            if (!p.searchTerm || typeof p.searchTerm !== "string") erros.push(tag + ": searchTerm ausente");
+            if (typeof p.minPrice !== "number" || p.minPrice < 0) erros.push(tag + ": minPrice deve ser número >= 0");
+            if (!Array.isArray(p.excludeKeywords)) erros.push(tag + ": excludeKeywords deve ser lista");
+            if (!Array.isArray(p.listings)) { erros.push(tag + ": listings deve ser lista"); return; }
+
+            p.listings.forEach((l, j) => {
+              const lt = tag + ".listings[" + j + "]";
+              if (!l.id) erros.push(lt + ": id ausente");
+              if (typeof l.price !== "number" || l.price <= 0) erros.push(lt + ": price deve ser número > 0");
+              if (!MODOS.includes(l.mode)) erros.push(lt + ": mode deve ser auction ou buynow");
+              if (typeof l.condition !== "string") erros.push(lt + ": condition ausente");
+            });
+          });
+
+          // ---------- history.json (opcional até o scraper rodar) ----------
+          if (fs.existsSync("data/history.json")) {
+            try {
+              const h = JSON.parse(fs.readFileSync("data/history.json", "utf8"));
+              if (typeof h !== "object" || Array.isArray(h) || h === null)
+                erros.push("history.json deve ser um objeto { idAnuncio: {...} }");
+            } catch (e) {
+              erros.push("history.json com JSON inválido -> " + e.message);
+            }
+          } else {
+            console.log("Aviso: history.json ainda não existe (normal antes da 1ª coleta).");
+          }
+
+          if (erros.length) {
+            console.error("Encontrados " + erros.length + " erro(s):");
+            erros.forEach(e => console.error(" - " + e));
+            process.exit(1);
+          }
+          console.log("OK: " + d.products.length + " produto(s) válidos.");
+          '
