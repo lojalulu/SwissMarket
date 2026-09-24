@@ -1,0 +1,83 @@
+# Caminho no repositório: .github/workflows/scrape-and-deploy.yml
+# SwissMarket Pulse — coleta agendada do Ricardo.ch + validação + commit + deploy
+
+name: Scrape Ricardo & Deploy
+
+on:
+  schedule:
+    - cron: "17 4 * * *"   # todo dia às 04:17 UTC (06:17 em Zurique no horário de verão)
+  workflow_dispatch:        # permite rodar manualmente pelo celular (aba Actions → Run workflow)
+
+permissions:
+  contents: write           # necessário para o bot commitar o products.json
+
+concurrency:
+  group: scrape-and-deploy  # impede duas execuções simultâneas brigando pelo mesmo arquivo
+  cancel-in-progress: false
+
+env:
+  # Opcional. Só preencha este secret se o site NÃO estiver conectado ao GitHub no Netlify.
+  NETLIFY_BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # npm install (e não npm ci) porque você não gera package-lock.json pelo celular
+      - name: Instalar dependências
+        run: npm install --no-audit --no-fund
+
+      - name: Rodar scraper
+        run: npx --yes tsx scripts/fetchRicardoData.ts
+        env:
+          SCRAPE_DELAY_MS: "4000"   # pausa entre requisições (rate-limit / respeito ao site)
+          RECHECK_MAX: "40"         # máx. de anúncios encerrados revisitados por execução
+
+      # Validação obrigatória: commits feitos pelo bot NÃO disparam o validate-data.yml,
+      # então validamos aqui antes de gravar qualquer coisa.
+      # Se o scraper for bloqueado e devolver lista vazia, o job falha e os dados antigos ficam intactos.
+      - name: Validar JSON
+        run: |
+          node -e '
+          const fs = require("fs");
+          const d = JSON.parse(fs.readFileSync("data/products.json", "utf8"));
+          if (typeof d.updatedAt !== "string") throw new Error("updatedAt ausente");
+          if (!Array.isArray(d.products) || d.products.length === 0) throw new Error("products vazio");
+          for (const p of d.products) {
+            if (!p.id || !p.name) throw new Error("produto sem id/name");
+            if (!Array.isArray(p.listings)) throw new Error("produto " + p.id + " sem listings");
+          }
+          console.log("OK: " + d.products.length + " produtos validados");
+          '
+
+      # Commita products.json + history.json (histórico que alimenta a métrica de liquidez)
+      - name: Commitar se houve mudança
+        id: commit
+        run: |
+          git config user.name "swissmarket-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet -- data/; then
+            echo "Sem mudanças nos dados."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "data: atualização automática Ricardo [$(date -u +%F)]"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Só roda se houve commit E se o secret NETLIFY_BUILD_HOOK existir.
+      # Se o Netlify já estiver ligado ao repositório, o próprio push acima dispara o deploy.
+      - name: Disparar deploy Netlify (opcional)
+        if: steps.commit.outputs.changed == 'true' && env.NETLIFY_BUILD_HOOK != ''
+        run: curl -fsS -X POST -d '{}' "$NETLIFY_BUILD_HOOK"
