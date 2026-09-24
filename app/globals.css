@@ -1,0 +1,36 @@
+/* Caminho no repositório: app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #05070d;
+  color: #e5e7eb;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100dvh;
+  background-image:
+    radial-gradient(60rem 40rem at 10% -10%, rgba(16, 185, 129, 0.12), transparent 60%),
+    radial-gradient(50rem 35rem at 110% 10%, rgba(99, 102, 241, 0.14), transparent 60%);
+  background-attachment: fixed;
+}
+
+/* Números alinhados (preços não "pulam" ao mudar) */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Esconde a barra de rolagem horizontal das abas/chips sem impedir o scroll */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
