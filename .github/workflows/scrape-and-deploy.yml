@@ -9,7 +9,7 @@ on:
   workflow_dispatch:        # permite rodar manualmente pelo celular (aba Actions → Run workflow)
 
 permissions:
-  contents: write           # necessário para o bot commitar o products.json
+  contents: write           # necessário para o bot commitar products.json e history.json
 
 concurrency:
   group: scrape-and-deploy  # impede duas execuções simultâneas brigando pelo mesmo arquivo
@@ -22,7 +22,7 @@ env:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Baixar o repositório
@@ -42,6 +42,7 @@ jobs:
         env:
           SCRAPE_DELAY_MS: "4000"   # pausa entre requisições (rate-limit / respeito ao site)
           RECHECK_MAX: "40"         # máx. de anúncios encerrados revisitados por execução
+          DETAIL_MAX: "8"           # máx. de anúncios novos abertos por produto (para ler a condição)
 
       # Validação obrigatória: commits feitos pelo bot NÃO disparam o validate-data.yml,
       # então validamos aqui antes de gravar qualquer coisa.
