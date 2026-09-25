@@ -13,21 +13,27 @@ async function main() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--ignore-certificate-errors',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--window-size=1920,1080',
       ],
     });
 
     const page = await browser.newPage();
 
     await page.setUserAgent(
-      'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
     );
 
-    console.log('Navegando até a página de busca do Ricardo.ch...');
+    console.log('Navegando até o Ricardo.ch...');
     const searchUrl = `https://www.ricardo.ch/de/s/${encodeURIComponent(query)}`;
     
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    console.log('Página carregada com sucesso! Extraindo título...');
+    console.log('Página carregada com sucesso!');
     const title = await page.title();
     console.log(`\nTítulo da Página: ${title}`);
 
