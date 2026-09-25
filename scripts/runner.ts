@@ -24,7 +24,7 @@ import { isChallengePage, parseDetailPage, parseSearchPage, searchUrl } from '..
 import { checkRelevance } from '../lib/text';
 import type { DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '2.0.0';
+const VERSION = '2.0.2';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────
@@ -50,7 +50,9 @@ const CFG = {
   delayMs: Number(process.env.DELAY_MS || 7000),
   recheckMax: Number(process.env.RECHECK_MAX || 25),
   navTimeout: Number(process.env.NAV_TIMEOUT_MS || 45000),
-  restartEvery: Number(process.env.RESTART_BROWSER_EVERY || 8),
+  // 1 = Chromium novo a cada página. Observado no Ricardo: a 1ª página de um browser novo passa
+  // sem desafio; navegar de novo no mesmo browser dispara a Cloudflare.
+  restartEvery: Number(process.env.RESTART_BROWSER_EVERY || 1),
   singleProcess: (process.env.SINGLE_PROCESS ?? '1') !== '0',
   loopMinutes: Number(opt('loop') ?? process.env.LOOP_MINUTES ?? 0),
   only: (opt('only') ?? process.env.PRODUCTS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
@@ -58,9 +60,8 @@ const CFG = {
   recheck: !flag('no-recheck'),
   inspect: opt('inspect'),
   debugDir: path.join(ROOT, 'data', 'debug'),
-  // Perfil persistente: guarda o cookie da Cloudflare (cf_clearance) entre reinícios do Chromium,
-  // para o desafio ser resolvido uma vez e não a cada produto.
-  profileDir: process.env.CHROME_PROFILE || path.join(ROOT, 'data', 'chrome-profile'),
+  // Perfil antigo (v2.0.1) — apagado ao arrancar: um perfil reutilizado era MAIS bloqueado.
+  oldProfileDir: path.join(ROOT, 'data', 'chrome-profile'),
   outboxDir: path.join(ROOT, 'data', 'outbox'),
 };
 
@@ -107,14 +108,9 @@ class BrowserSession {
     }
     await this.close();
     const exe = chromiumPath();
-    fs.mkdirSync(CFG.profileDir, { recursive: true });
-    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-      try { fs.rmSync(path.join(CFG.profileDir, lock), { force: true }); } catch { /* lock antigo de um crash */ }
-    }
     this.browser = await puppeteer.launch({
       executablePath: exe,
       headless: true,
-      userDataDir: CFG.profileDir,
       protocolTimeout: 120_000,
       args: [
         '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
@@ -169,17 +165,17 @@ async function load(session: BrowserSession, url: string, waitForCards: boolean)
   // Desafio Cloudflare: o Chromium real costuma resolvê-lo sozinho em alguns segundos.
   let html = await page.content();
   if (isChallengePage(html)) {
-    log('   🛡️  Desafio Cloudflare — a aguardar (até 45 s)…');
-    const solved = () => page.waitForFunction(
-      () => !/Just a moment|Einen Moment|Attention Required/i.test(document.title), { timeout: 45_000 },
-    ).then(() => true, () => false);
-    let ok = await solved();
-    if (!ok) {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: CFG.navTimeout }).catch(() => {});
-      ok = await solved();
+    log('   🛡️  Desafio Cloudflare — a aguardar (até 30 s)…');
+    const until = Date.now() + 30_000;
+    while (Date.now() < until) {
+      await sleep(1500);
+      try {
+        html = await page.content();
+        if (!isChallengePage(html)) break;
+      } catch { /* a página está a recarregar (o desafio faz isso) — tenta de novo */ }
     }
-    await sleep(2000);
-    html = await page.content();
+    await sleep(1500);
+    try { html = await page.content(); } catch { /* ignora */ }
     if (isChallengePage(html)) return { html, status, finalUrl: page.url(), challenge: true };
     log('   ✅ Desafio resolvido.');
   }
@@ -264,8 +260,8 @@ async function scrapeTerm(session: BrowserSession, term: string): Promise<{ item
       if (res.challenge) {
         consecutiveBlocks++;
         warn(`Bloqueado pela Cloudflare (tentativa ${attempt}).`);
-        if (attempt >= 2) await session.close(); // 1ª vez mantém o browser (e os cookies)
-        await sleep(jitter(30_000 * attempt));
+        await session.close(); // browser novo = nova tentativa limpa
+        await sleep(jitter(15_000 * attempt));
         continue;
       }
       consecutiveBlocks = 0;
@@ -422,6 +418,7 @@ async function cycle() {
   log(`🚀 SwissMarket runner v${VERSION} — ${products.length} produtos → ${CFG.apiUrl}${CFG.dryRun ? ' (dry-run)' : ''}`);
   if (!CFG.token && !CFG.dryRun) warn('INGEST_TOKEN vazio: funciona só se a VPS também não tiver token.');
 
+  try { fs.rmSync(CFG.oldProfileDir, { recursive: true, force: true }); } catch { /* ignora */ }
   if (!CFG.dryRun) await flushOutbox();
   const session = new BrowserSession();
   const summary: Summary[] = [];
