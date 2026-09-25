@@ -22,21 +22,14 @@ async function main() {
       'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36'
     );
 
-    console.log('Navegando até a API do Ricardo.ch...');
-    const url = `https://www.ricardo.ch/api/frontend/v2/search?query=${encodeURIComponent(query)}&page=1`;
+    console.log('Navegando até a página de busca do Ricardo.ch...');
+    const searchUrl = `https://www.ricardo.ch/de/s/${encodeURIComponent(query)}`;
+    
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    await page.goto(url, { waitUntil: 'networkidle2' });
-
-    const content = await page.evaluate(() => document.body.innerText);
-    const data = JSON.parse(content);
-
-    console.log(`\nSucesso total! Encontrados ${data.totalCount || 0} resultados.`);
-
-    if (data.articles && data.articles.length > 0) {
-      console.log('\nExemplo do primeiro produto encontrado:');
-      console.log(`- Título: ${data.articles[0].title}`);
-      console.log(`- Preço: CHF ${data.articles[0].buyNowPrice || data.articles[0].bidPrice || 'N/A'}`);
-    }
+    console.log('Página carregada com sucesso! Extraindo título...');
+    const title = await page.title();
+    console.log(`\nTítulo da Página: ${title}`);
 
     await browser.close();
   } catch (error) {
