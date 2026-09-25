@@ -291,6 +291,12 @@ export function computeProductStats(
       quick = r2(ask.p25! * 0.9);
     }
   }
+  // Preços muito espalhados (tamanhos/estados/modelos diferentes misturados) → baixa a confiança.
+  const spreadSrc = basis === 'vendidos' ? soldDist : basis === 'pedidos' ? dist(asking) : null;
+  const spread = spreadSrc && spreadSrc.median && spreadSrc.p25 !== null && spreadSrc.p75 !== null
+    ? (spreadSrc.p75 - spreadSrc.p25) / spreadSrc.median : null;
+  const dispersed = spread !== null && spread > 0.5;
+  if (dispersed) confidence = confidence === 'alta' ? 'media' : 'baixa';
   const recommended = quick ? maxBuyFor(quick, p) : null;
   const ceiling = median ? maxBuyFor(median, p) : null;
 
@@ -362,7 +368,9 @@ export function computeProductStats(
   if (!recommended?.maxBuy) verdict = 'Ainda sem dados suficientes — deixe o runner recolher mais ciclos.';
   else if (liquidity.label === 'lento') verdict = `Giro lento: só compre muito abaixo de CHF ${recommended.maxBuy}.`;
   else verdict = `Compre até CHF ${recommended.maxBuy} para revender a ~CHF ${Math.round(quick!)} com lucro ≈ CHF ${Math.round(recommended.profitAtMaxBuy!)}.`;
-  if (confidence === 'baixa') verdict += ' (Confiança baixa: baseado em poucos dados.)';
+  if (basis === 'pedidos') verdict += ' (Estimativa pelos preços PEDIDOS — ainda sem vendas confirmadas; sem alertas até haver vendas.)';
+  else if (confidence === 'baixa') verdict += ' (Confiança baixa: baseado em poucos dados.)';
+  if (dispersed) verdict += ' ⚠️ Preços muito espalhados: o anúncio pode não ser comparável (tamanho, estado ou modelo diferente).';
 
   const last = runs.find((r) => r.at === lastRunAt);
   return {

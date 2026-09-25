@@ -6,6 +6,7 @@
 //   • Telegram: TELEGRAM_BOT_TOKEN=…  TELEGRAM_CHAT_ID=…
 //
 // Filtros: ALERT_MIN_SCORE (0–100, padrão 45) · ALERT_KINDS=buynow,auction,offer
+// Só alerta quando o preço de revenda já se baseia em vendas/leilões reais (não em preços pedidos).
 import { getProduct } from '../config/products';
 import { computeProductStats, type Opportunity, type ProductStats } from './stats';
 import { markAlerted, recordsFor, runsFor, shouldAlert } from './store';
@@ -95,6 +96,9 @@ export async function runAlertsFor(productId: string, now = new Date()): Promise
   const stats = computeProductStats(p, recordsFor(p.id), runsFor(p.id), now, 30);
   const minScore = Number(env('ALERT_MIN_SCORE') || 45);
   const kinds = (env('ALERT_KINDS') || 'buynow,auction,offer').split(',').map((k) => k.trim());
+  // Sem vendas reais ainda (só preços pedidos) → nada de alertas: o "teto" ainda é um palpite.
+  // Pode forçar com ALERT_ALLOW_ASKING=1.
+  if (stats.pricing.basis === 'pedidos' && env('ALERT_ALLOW_ASKING') !== '1') return 0;
   const toSend = stats.opportunities
     .filter((o) => o.score >= minScore && kinds.includes(o.kind))
     .filter((o) => shouldAlert(`${o.kind}:${p.id}:${o.id}`, o.cost, now))

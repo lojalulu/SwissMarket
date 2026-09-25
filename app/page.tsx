@@ -44,7 +44,7 @@ const BASIS = {
 
 type Tab = "radar" | "produtos" | "ranking";
 type RadarKind = "todos" | "buynow" | "auction" | "offer";
-type Opp = ProductStats["opportunities"][number] & { product: string; productId: string; confidence: string; resale: number | null };
+type Opp = ProductStats["opportunities"][number] & { product: string; productId: string; confidence: string; resale: number | null; basis: string };
 
 export default function Page() {
   const [data, setData] = useState<{ generatedAt: string; products: ProductStats[]; alerts?: string[] } | null>(null);
@@ -83,7 +83,7 @@ export default function Page() {
 
   const opps: Opp[] = useMemo(
     () => products.flatMap((p) => p.opportunities.map((o) => ({
-      ...o, product: p.name, productId: p.productId, confidence: p.pricing.confidence, resale: p.pricing.resaleQuick,
+      ...o, product: p.name, productId: p.productId, confidence: p.pricing.confidence, resale: p.pricing.resaleQuick, basis: p.pricing.basis,
     }))).sort((a, b) => b.score - a.score),
     [products],
   );
@@ -243,7 +243,7 @@ function RadarView({ opps }: { opps: Opp[] }) {
                     </span>
                     {!o.nearby && o.shipping ? <span className="text-xs text-slate-400">+ portes {chf(o.shipping)}</span> : null}
                     <span className="text-emerald-300">lucro ≈ {chf(o.estProfit)} ({o.roiPct}%)</span>
-                    {o.resale && <span className="text-xs text-slate-500">revenda ~{chf(o.resale)}</span>}
+                    {o.resale && <span className="text-xs text-slate-500">revenda ~{chf(o.resale)}{o.basis === "pedidos" ? " (estimada pelos preços pedidos)" : ""}</span>}
                   </div>
                   <div className="mt-2 flex gap-2">
                     <a href={o.url} target="_blank" rel="noreferrer"
