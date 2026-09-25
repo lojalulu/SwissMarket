@@ -1,644 +1,306 @@
 "use client";
-// Caminho no repositório: app/page.tsx
-// SwissMarket Pulse — painel "Comprar / Não Comprar", calculadora do Preço Teto,
-// gerador de negociação (DE/FR) e "Buscar agora". Mobile-first, dark mode.
+// app/page.tsx — SwissMarket Pulse: preços médios, liquidez e Preço Máximo de Compra por produto.
+// Lê /api/stats (calculado na VPS a partir dos dados enviados pelo runner). Mobile-first, dark.
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
-  Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from "recharts";
-import {
-  Check, CircleAlert, CircleCheck, CircleX, Copy, ExternalLink, Gavel, Loader2,
-  Search, ShoppingBag, Smartphone, Tag, TriangleAlert, Zap,
+  ArrowDownWideNarrow, ChevronDown, ExternalLink, Flame, Gavel, Info, Loader2, RefreshCw, ShoppingBag, Tag, TrendingUp,
 } from "lucide-react";
-import db from "../data/products.json";
-import {
-  AUCTION_MIN_BIDS, ceilingPrice, statsOf, type ModeStats,
-} from "../lib/ricardo";
+import type { ProductStats } from "@/lib/stats";
 
-// ─────────────────────────────── Tipos ───────────────────────────────
+type SortKey = "liquidez" | "lucro" | "nome";
 
-type Mode = "auction" | "buynow";
-type LiqLabel = "rapido" | "medio" | "lento" | "sem_dados";
+const chf = (n: number | null | undefined, digits = 0) =>
+  n === null || n === undefined ? "—" : "CHF " + n.toLocaleString("de-CH", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 
-interface Row {
-  id: string; title: string; url: string; mode: Mode;
-  price: number; buyNowPrice: number | null; bids: number; condition?: string;
-}
+const ago = (iso: string | null) => {
+  if (!iso) return "nunca";
+  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return "agora";
+  if (m < 60) return `há ${m} min`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `há ${h} h` : `há ${Math.round(h / 24)} dias`;
+};
 
-interface Product {
-  id: string; name: string; category?: string; searchTerm: string;
-  listings: Row[];
-  liquidityProxy?: { auctions: number; auctionsWithBidsPct: number; avgBids: number; label: LiqLabel };
-  liquidity?: { status: "confirmada" | "coletando_dados"; soldLast60d: number; medianDaysToSell: number | null; label: LiqLabel };
-  sold?: { price: number; mode: Mode; condition: string; endedAt: string }[];
-  lastScrapeOk?: string; lastError?: string;
-}
-
-interface Market {
-  name: string;
-  sourceUrl: string;
-  auction: ModeStats;
-  buynow: ModeStats;
-  liquidity: { label: LiqLabel; status: "confirmada" | "estimada"; detail: string };
-  rows: Row[];
-  note?: string | null;
-}
-
-interface LiveResult {
-  query: string; source: string; fetchedAt: string; totalOnPage: number; used: number;
-  stats: { auction: ModeStats; buynow: ModeStats };
-  liquidity: { auctions: number; auctionsWithBidsPct: number; avgBids: number; label: LiqLabel };
-  listings: Row[];
-  warning: string | null;
-  error?: string;
-}
-
-const DATA = db as unknown as { updatedAt: string; products: Product[] };
-
-// ─────────────────────────────── Constantes ───────────────────────────────
-
-const MARGINS = [0.2, 0.25, 0.3, 0.35];
-const COLOR_AUCTION = "#3987e5"; // azul — Leilão
-const COLOR_BUYNOW = "#d95926";  // laranja — Sofort-Kaufen
-
-const LIQ: Record<LiqLabel, { text: string; cls: string }> = {
-  rapido: { text: "Giro Rápido", cls: "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30" },
-  medio: { text: "Giro Médio", cls: "bg-amber-500/15 text-amber-300 ring-amber-400/30" },
-  lento: { text: "Giro Lento", cls: "bg-rose-500/15 text-rose-300 ring-rose-400/30" },
+const LIQ = {
+  rapido: { text: "Giro rápido", cls: "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30" },
+  medio: { text: "Giro médio", cls: "bg-amber-500/15 text-amber-300 ring-amber-400/30" },
+  lento: { text: "Giro lento", cls: "bg-rose-500/15 text-rose-300 ring-rose-400/30" },
   sem_dados: { text: "Sem dados", cls: "bg-slate-500/15 text-slate-300 ring-slate-400/30" },
-};
+} as const;
 
-const chf = (n: number | null | undefined) =>
-  n === null || n === undefined ? "—" : "CHF " + Math.round(n).toLocaleString("de-CH");
+const CONF = {
+  alta: "text-emerald-300", media: "text-amber-300", baixa: "text-rose-300", nenhuma: "text-slate-400",
+} as const;
 
-const fmtDate = (iso: string) => {
-  const d = new Date(iso);
-  return isNaN(d.getTime())
-    ? "—"
-    : d.toLocaleString("de-CH", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-};
-
-// ─────────────────────── Dados de um produto cadastrado ───────────────────────
-
-function marketFromProduct(p: Product, condition: string): Market {
-  const rows = condition === "Todas" ? p.listings : p.listings.filter((l) => l.condition === condition);
-  const sold = (p.sold ?? []).filter((s) => condition === "Todas" || s.condition === condition);
-
-  // Leilão: lance atual dos leilões com lances suficientes + preços finais reais já registrados.
-  const auction = [
-    ...rows.filter((l) => l.mode === "auction" && l.bids >= AUCTION_MIN_BIDS).map((l) => l.price),
-    ...sold.filter((s) => s.mode === "auction").map((s) => s.price),
-  ];
-  // Sofort-Kaufen: preços fixos anunciados + vendas Sofort registradas.
-  const buynow = [
-    ...rows.map((l) => l.buyNowPrice).filter((v): v is number => typeof v === "number"),
-    ...sold.filter((s) => s.mode === "buynow").map((s) => s.price),
-  ];
-
-  let liquidity: Market["liquidity"];
-  if (p.liquidity?.status === "confirmada") {
-    liquidity = {
-      label: p.liquidity.label,
-      status: "confirmada",
-      detail: `${p.liquidity.soldLast60d} vendas em 60 dias · ~${p.liquidity.medianDaysToSell} dias para vender`,
-    };
-  } else {
-    const x = p.liquidityProxy;
-    liquidity = {
-      label: x?.label ?? "sem_dados",
-      status: "estimada",
-      detail: x && x.auctions
-        ? `${x.auctionsWithBidsPct}% dos leilões com lances · média de ${x.avgBids} lances`
-        : "Poucos leilões ativos para estimar",
-    };
-  }
-
-  return {
-    name: p.name,
-    sourceUrl: `https://www.ricardo.ch/de/s/${encodeURIComponent(p.searchTerm)}/`,
-    auction: statsOf(auction),
-    buynow: statsOf(buynow),
-    liquidity,
-    rows,
-    note: p.lastError ? `Última coleta falhou (${p.lastError.slice(0, 16)}). Mostrando os dados anteriores.` : null,
-  };
-}
-
-// ─────────────────────────────── Página ───────────────────────────────
-
-type Tab = "eletronicos" | "bolsas" | "buscar";
+const BASIS = {
+  vendidos: "vendas confirmadas",
+  misto: "vendas + leilões ativos com ≥3 lances",
+  pedidos: "preços pedidos −10 % (ainda sem vendas)",
+  sem_dados: "sem dados",
+} as const;
 
 export default function Page() {
-  const [tab, setTab] = useState<Tab>("eletronicos");
-  const products = DATA.products.filter((p) => (p.category ?? "eletronicos") === tab);
-  const [selected, setSelected] = useState<Record<string, string>>({});
-  const productId = selected[tab] ?? products[0]?.id;
-  const product = DATA.products.find((p) => p.id === productId);
-  const [condition, setCondition] = useState("Todas");
+  const [data, setData] = useState<{ generatedAt: string; products: ProductStats[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [days, setDays] = useState(30);
+  const [sort, setSort] = useState<SortKey>("liquidez");
+  const [open, setOpen] = useState<string | null>(null);
 
-  const conditions = useMemo(() => {
-    const set = new Set((product?.listings ?? []).map((l) => l.condition).filter((c): c is string => !!c && c !== "Unbekannt"));
-    return ["Todas", ...set];
-  }, [product]);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/stats?days=${days}`, { cache: "no-store" });
+      const j = await r.json();
+      if (!j.success) throw new Error(j.error || "Erro");
+      setData(j);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [days]);
 
-  const market = useMemo(
-    () => (product ? marketFromProduct(product, conditions.includes(condition) ? condition : "Todas") : null),
-    [product, condition, conditions]
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { const t = setInterval(load, 5 * 60e3); return () => clearInterval(t); }, [load]);
+
+  const products = useMemo(() => {
+    const list = [...(data?.products ?? [])];
+    if (sort === "nome") list.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sort === "lucro") list.sort((a, b) => (b.pricing.recommended?.profitAtMaxBuy ?? -1) - (a.pricing.recommended?.profitAtMaxBuy ?? -1));
+    else list.sort((a, b) => (b.liquidity.score ?? -1) - (a.liquidity.score ?? -1));
+    return list;
+  }, [data, sort]);
+
+  const allOpps = useMemo(
+    () => products.flatMap((p) => p.opportunities.map((o) => ({ ...o, product: p.name }))).sort((a, b) => b.estProfit - a.estProfit),
+    [products],
   );
+  const lastRun = products.map((p) => p.tracking.lastRun).filter(Boolean).sort().pop() ?? null;
 
   return (
-    <main className="mx-auto w-full max-w-md px-4 pb-16 pt-5">
-      <header className="mb-4 flex items-end justify-between">
+    <main className="mx-auto max-w-5xl px-4 pb-16 pt-6">
+      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-white">SwissMarket Pulse</h1>
-          <p className="text-xs text-slate-400">Marketplace / Tutti → Ricardo.ch</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-white">SwissMarket Pulse</h1>
+          <p className="text-sm text-slate-400">
+            Ricardo.ch · última recolha {ago(lastRun)} · {products.length} produtos
+          </p>
         </div>
-        <p className="text-right text-[11px] leading-tight text-slate-500">
-          Dados diários<br />
-          <span className="tabular text-slate-400">{fmtDate(DATA.updatedAt)}</span>
-        </p>
+        <div className="flex items-center gap-2">
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+            className="rounded-lg bg-slate-800/80 px-2 py-1.5 text-sm text-slate-200 ring-1 ring-white/10">
+            {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} dias</option>)}
+          </select>
+          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
+            className="rounded-lg bg-slate-800/80 px-2 py-1.5 text-sm text-slate-200 ring-1 ring-white/10">
+            <option value="liquidez">Mais líquidos</option>
+            <option value="lucro">Maior lucro</option>
+            <option value="nome">Nome</option>
+          </select>
+          <button onClick={load} className="rounded-lg bg-slate-800/80 p-2 text-slate-200 ring-1 ring-white/10" aria-label="Atualizar">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          </button>
+        </div>
       </header>
 
-      {/* Abas */}
-      <nav className="mb-4 grid grid-cols-3 gap-1 rounded-2xl bg-white/5 p-1 ring-1 ring-white/10">
-        {([
-          ["eletronicos", "Eletrônicos", Smartphone],
-          ["bolsas", "Bolsas", ShoppingBag],
-          ["buscar", "Buscar", Search],
-        ] as const).map(([id, label, Icon]) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={`flex min-h-11 items-center justify-center gap-1.5 rounded-xl text-sm font-medium transition ${
-              tab === id ? "bg-white/15 text-white shadow" : "text-slate-400"
-            }`}
-          >
-            <Icon size={16} aria-hidden /> {label}
-          </button>
-        ))}
-      </nav>
+      {error && <div className="mb-4 rounded-xl bg-rose-500/10 p-3 text-sm text-rose-200 ring-1 ring-rose-400/30">Erro: {error}</div>}
 
-      {tab === "buscar" ? (
-        <LiveSearch />
-      ) : (
-        <>
-          {/* Seletor de produto */}
-          <div className="no-scrollbar -mx-4 mb-3 flex gap-2 overflow-x-auto px-4">
-            {products.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => { setSelected({ ...selected, [tab]: p.id }); setCondition("Todas"); }}
-                className={`shrink-0 rounded-full px-4 py-2.5 text-sm ring-1 transition ${
-                  p.id === productId
-                    ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40"
-                    : "bg-white/5 text-slate-300 ring-white/10"
-                }`}
-              >
-                {p.name}
-              </button>
+      {allOpps.length > 0 && (
+        <section className="mb-6 rounded-2xl bg-emerald-500/[0.07] p-4 ring-1 ring-emerald-400/25">
+          <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-emerald-200">
+            <Flame className="h-4 w-4" /> Oportunidades agora ({allOpps.length}) — abaixo do preço máximo de compra
+          </h2>
+          <ul className="divide-y divide-white/5">
+            {allOpps.slice(0, 8).map((o) => (
+              <li key={o.product + o.id + o.kind} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <a href={o.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate text-slate-200 hover:text-white">
+                  <span className="text-slate-400">{o.product} · </span>{o.title}
+                </a>
+                <span className="tabular shrink-0 text-right">
+                  <span className="text-white">{chf(o.price)}</span>
+                  <span className="ml-2 text-emerald-300">+{chf(o.estProfit)}</span>
+                  {o.kind === "auction" && <Gavel className="ml-1 inline h-3.5 w-3.5 text-sky-300" />}
+                </span>
+              </li>
             ))}
-          </div>
-
-          {conditions.length > 1 && (
-            <div className="no-scrollbar -mx-4 mb-4 flex gap-2 overflow-x-auto px-4">
-              {conditions.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setCondition(c)}
-                  className={`shrink-0 rounded-lg px-3 py-1.5 text-xs ring-1 ${
-                    c === condition ? "bg-white/15 text-white ring-white/30" : "bg-transparent text-slate-400 ring-white/10"
-                  }`}
-                >
-                  {c === "Todas" ? "Todas as condições" : c}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {tab === "bolsas" && (
-            <p className="mb-4 flex gap-2 rounded-xl bg-amber-500/10 p-3 text-xs text-amber-200 ring-1 ring-amber-400/20">
-              <TriangleAlert size={16} className="shrink-0" aria-hidden />
-              Risco de réplica: autentique a peça antes de comprar e desconte o custo da autenticação da margem.
-            </p>
-          )}
-
-          {market && product && (product.listings.length > 0 || (product.sold?.length ?? 0) > 0) ? (
-            <Panel market={market} />
-          ) : (
-            <Card>
-              <p className="text-sm text-slate-300">Aguardando a 1ª coleta automática deste produto.</p>
-              <p className="mt-1 text-xs text-slate-500">
-                Enquanto isso, use a aba <b>Buscar</b> com o termo “{product?.searchTerm}”.
-              </p>
-            </Card>
-          )}
-        </>
+          </ul>
+        </section>
       )}
+
+      {!data && !error && <p className="text-slate-400">A carregar…</p>}
+      {data && products.every((p) => !p.tracking.lastRun) && (
+        <div className="mb-6 rounded-xl bg-slate-800/60 p-4 text-sm text-slate-300 ring-1 ring-white/10">
+          Ainda não há dados. Corra no telemóvel: <code className="rounded bg-black/40 px-1.5 py-0.5">npx tsx scripts/runner.ts</code>
+        </div>
+      )}
+
+      <div className="grid gap-3">
+        {products.map((p) => (
+          <ProductCard key={p.productId} p={p} open={open === p.productId} onToggle={() => setOpen(open === p.productId ? null : p.productId)} />
+        ))}
+      </div>
+
+      <footer className="mt-10 space-y-1 text-xs text-slate-500">
+        <p>Preço máx. de compra = revenda rápida − comissão Ricardo (10–12 %, teto CHF 290) − custos, com margem mínima de 20 % e lucro mínimo de CHF 40 (ajustável em config/products.ts).</p>
+        <p>Revenda rápida = meio caminho entre o 1.º quartil e a mediana dos preços de venda. Outliers removidos por IQR.</p>
+      </footer>
     </main>
   );
 }
 
-// ─────────────────────────────── Buscar agora ───────────────────────────────
-
-function LiveSearch() {
-  const [q, setQ] = useState("");
-  const [min, setMin] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [res, setRes] = useState<LiveResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function run(e: React.FormEvent) {
-    e.preventDefault();
-    if (q.trim().length < 2) return;
-    setLoading(true); setErr(null);
-    try {
-      const params = new URLSearchParams({ q: q.trim() });
-      if (min) params.set("min", min);
-      const r = await fetch(`/api/search?${params}`);
-      const j = (await r.json()) as LiveResult;
-      if (!r.ok || j.error) throw new Error(j.error ?? `Erro ${r.status}`);
-      setRes(j);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const market: Market | null = res && {
-    name: res.query,
-    sourceUrl: res.source,
-    auction: res.stats.auction,
-    buynow: res.stats.buynow,
-    liquidity: {
-      label: res.liquidity.label,
-      status: "estimada",
-      detail: res.liquidity.auctions
-        ? `${res.liquidity.auctionsWithBidsPct}% dos leilões com lances · média de ${res.liquidity.avgBids} lances`
-        : "Poucos leilões ativos para estimar",
-    },
-    rows: res.listings,
-    note: [
-      `${res.used} de ${res.totalOnPage} anúncios usados · 1ª página do Ricardo · ${fmtDate(res.fetchedAt)}`,
-      "Leilão = lance atual (tende a ficar abaixo do preço final).",
-      res.warning,
-    ].filter(Boolean).join(" "),
-  };
-
+function Stat({ label, value, sub, strong }: { label: string; value: string; sub?: string; strong?: boolean }) {
   return (
-    <>
-      <form onSubmit={run} className="mb-4 space-y-2">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Ex.: macbook air m1, dyson v11, gucci jackie"
-          className="min-h-12 w-full rounded-xl bg-white/5 px-4 text-base text-white ring-1 ring-white/10 placeholder:text-slate-500 focus:outline-none focus:ring-emerald-400/60"
-          enterKeyHint="search"
-        />
-        <div className="flex gap-2">
-          <input
-            value={min}
-            onChange={(e) => setMin(e.target.value.replace(/\D/g, ""))}
-            inputMode="numeric"
-            placeholder="Preço mín. CHF"
-            aria-label="Preço mínimo em CHF (filtra acessórios)"
-            className="min-h-12 flex-1 rounded-xl bg-white/5 px-4 text-sm text-white ring-1 ring-white/10 placeholder:text-slate-500 focus:outline-none focus:ring-emerald-400/60"
-          />
-          <button
-            type="submit"
-            disabled={loading || q.trim().length < 2}
-            className="flex min-h-12 items-center gap-2 rounded-xl bg-emerald-500 px-5 font-semibold text-emerald-950 disabled:opacity-40"
-          >
-            {loading ? <Loader2 size={18} className="animate-spin" aria-hidden /> : <Zap size={18} aria-hidden />}
-            Buscar
-          </button>
-        </div>
-      </form>
-
-      {err && (
-        <p className="mb-4 flex gap-2 rounded-xl bg-rose-500/10 p-3 text-sm text-rose-200 ring-1 ring-rose-400/20">
-          <CircleAlert size={18} className="shrink-0" aria-hidden /> {err}
-        </p>
-      )}
-      {market ? <Panel market={market} /> : !err && (
-        <Card>
-          <p className="text-sm text-slate-300">Consulta o Ricardo na hora, para qualquer produto.</p>
-          <p className="mt-1 text-xs text-slate-500">Dica: termos específicos (“iphone 12 64gb”) dão medianas mais confiáveis.</p>
-        </Card>
-      )}
-    </>
-  );
-}
-
-// ─────────────────────────────── Painel de decisão ───────────────────────────────
-
-function Panel({ market }: { market: Market }) {
-  const [mode, setMode] = useState<Mode>("auction");
-  const [fee, setFee] = useState(0.1);
-  const [margin, setMargin] = useState(0.25);
-  const [asking, setAsking] = useState("");
-
-  const med = (mode === "auction" ? market.auction : market.buynow).median;
-  const teto = med ? ceilingPrice(med, fee, margin) : null;
-  const liq = LIQ[market.liquidity.label];
-
-  const ask = Number(asking);
-  const hasAsk = asking !== "" && ask > 0 && teto !== null && med !== null;
-  const profit = hasAsk ? Math.round(med! * (1 - fee) - ask) : 0;
-  const verdict = !hasAsk ? null : ask <= teto! ? "buy" : ask <= teto! * 1.15 ? "negotiate" : "skip";
-
-  return (
-    <div className="space-y-3">
-      {/* Preço Teto — sempre acima da dobra */}
-      <Card className="text-center">
-        <p className="text-xs font-semibold uppercase tracking-widest text-rose-300">🚨 Preço Teto de Compra</p>
-        <p className="tabular mt-1 text-5xl font-extrabold text-white">{teto ? chf(teto) : "—"}</p>
-        <p className="mt-1 text-xs text-slate-400">
-          {med
-            ? `Mediana ${mode === "auction" ? "Leilão" : "Sofort"} ${chf(med)} × (1 − ${fee * 100}%) × (1 − ${margin * 100}%)`
-            : `Sem ${mode === "auction" ? "leilões com " + AUCTION_MIN_BIDS + "+ lances" : "preços Sofort"} suficientes. Troque o modo de giro.`}
-        </p>
-        <div className="mt-3 flex items-center justify-center gap-2">
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${liq.cls}`}>{liq.text}</span>
-          <span className="text-[11px] text-slate-500">{market.liquidity.status}</span>
-        </div>
-        <p className="mt-1 text-[11px] text-slate-500">{market.liquidity.detail}</p>
-      </Card>
-
-      {/* Controles */}
-      <Card className="space-y-3">
-        <Segmented
-          label="Modo de giro"
-          value={mode}
-          onChange={(v) => setMode(v as Mode)}
-          options={[["auction", "Giro rápido · Leilão"], ["buynow", "Margem máx. · Sofort"]]}
-        />
-        <Segmented
-          label="Canal de venda"
-          value={String(fee)}
-          onChange={(v) => setFee(Number(v))}
-          options={[["0.1", "Ricardo −10%"], ["0", "Direto / cash 0%"]]}
-        />
-        <Segmented
-          label="Margem de lucro líquido"
-          value={String(margin)}
-          onChange={(v) => setMargin(Number(v))}
-          options={MARGINS.map((m) => [String(m), `${m * 100}%`] as [string, string])}
-        />
-      </Card>
-
-      {/* Comprar / Não comprar */}
-      <Card>
-        <label className="text-xs text-slate-400" htmlFor="ask">Preço pedido no anúncio (CHF)</label>
-        <input
-          id="ask"
-          value={asking}
-          onChange={(e) => setAsking(e.target.value.replace(/[^\d]/g, ""))}
-          inputMode="numeric"
-          placeholder="Ex.: 350"
-          className="tabular mt-1 min-h-12 w-full rounded-xl bg-black/30 px-4 text-lg text-white ring-1 ring-white/10 focus:outline-none focus:ring-emerald-400/60"
-        />
-        {verdict && (
-          <div
-            className={`mt-3 flex items-center gap-3 rounded-xl p-3 ring-1 ${
-              verdict === "buy"
-                ? "bg-emerald-500/15 ring-emerald-400/30"
-                : verdict === "negotiate"
-                ? "bg-amber-500/15 ring-amber-400/30"
-                : "bg-rose-500/15 ring-rose-400/30"
-            }`}
-          >
-            {verdict === "buy" ? <CircleCheck className="text-emerald-300" aria-hidden />
-              : verdict === "negotiate" ? <CircleAlert className="text-amber-300" aria-hidden />
-              : <CircleX className="text-rose-300" aria-hidden />}
-            <div>
-              <p className="font-bold text-white">
-                {verdict === "buy" ? "COMPRAR" : verdict === "negotiate" ? "NEGOCIAR" : "NÃO COMPRAR"}
-              </p>
-              <p className="tabular text-xs text-slate-300">
-                Lucro estimado {chf(profit)} ({Math.round((profit / (med! * (1 - fee))) * 100)}% da receita líquida)
-                {verdict === "negotiate" && ` · peça ${chf(teto)}`}
-              </p>
-            </div>
-          </div>
-        )}
-      </Card>
-
-      {/* Breakdown piso × teto */}
-      <div className="grid grid-cols-2 gap-3">
-        <StatCard icon={<Gavel size={16} aria-hidden />} color={COLOR_AUCTION} title="Mediana Leilão" sub="piso · liquidação rápida" s={market.auction} />
-        <StatCard icon={<Tag size={16} aria-hidden />} color={COLOR_BUYNOW} title="Mediana Sofort" sub="teto · margem máxima" s={market.buynow} />
-      </div>
-
-      <Negotiation name={market.name} teto={teto} />
-
-      <Distribution rows={market.rows} />
-
-      <Listings rows={market.rows} sourceUrl={market.sourceUrl} />
-
-      {market.note && <p className="px-1 text-[11px] leading-relaxed text-slate-500">{market.note}</p>}
+    <div className="rounded-xl bg-black/20 px-3 py-2 ring-1 ring-white/5">
+      <div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div>
+      <div className={`tabular ${strong ? "text-lg font-semibold text-white" : "text-base text-slate-100"}`}>{value}</div>
+      {sub && <div className="text-[11px] text-slate-500">{sub}</div>}
     </div>
   );
 }
 
-// ─────────────────────────────── Negociação DE/FR ───────────────────────────────
+function ProductCard({ p, open, onToggle }: { p: ProductStats; open: boolean; onToggle: () => void }) {
+  const liq = LIQ[p.liquidity.label];
+  const rec = p.pricing.recommended;
+  return (
+    <article className="rounded-2xl bg-slate-900/70 ring-1 ring-white/10">
+      <button onClick={onToggle} className="w-full p-4 text-left">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="truncate font-semibold text-white">{p.name}</h3>
+            <p className="text-xs text-slate-400">
+              {p.counts.active} ativos · {p.sold.n} vendas em análise · recolha {ago(p.tracking.lastRun)}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={`rounded-full px-2 py-0.5 text-xs ring-1 ${liq.cls}`}>
+              {liq.text}{p.liquidity.score !== null ? ` · ${p.liquidity.score}` : ""}
+            </span>
+            <ChevronDown className={`h-4 w-4 text-slate-400 transition ${open ? "rotate-180" : ""}`} />
+          </div>
+        </div>
 
-function Negotiation({ name, teto }: { name: string; teto: number | null }) {
-  const [lang, setLang] = useState<"de" | "fr">("de");
-  const [discount, setDiscount] = useState(0);
-  const [copied, setCopied] = useState(false);
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Stat label="Comprar até" value={chf(rec?.maxBuy)} sub={rec?.profitAtMaxBuy ? `lucro ≈ ${chf(rec.profitAtMaxBuy)}` : undefined} strong />
+          <Stat label="Revenda rápida" value={chf(p.pricing.resaleQuick)} sub={`mediana ${chf(p.pricing.resaleMedian)}`} />
+          <Stat label="Preço médio vendido" value={chf(p.sold.mean)} sub={p.sold.n ? `${chf(p.sold.p25)} – ${chf(p.sold.p75)}` : "sem vendas ainda"} />
+          <Stat
+            label="Vendas / 30 dias"
+            value={p.liquidity.salesPer30d !== null ? String(p.liquidity.salesPer30d) : "—"}
+            sub={p.liquidity.medianDaysToSell !== null ? `~${p.liquidity.medianDaysToSell} dias p/ vender` : p.liquidity.basis === "estimada" ? `${p.active.auctionsWithBidsPct}% leilões c/ lances` : undefined}
+          />
+        </div>
+        <p className="mt-3 text-sm text-slate-300">{p.verdict}</p>
+      </button>
 
-  const offer = teto ? Math.floor((teto * (1 - discount)) / 5) * 5 : null; // arredonda para múltiplos de 5
-  const text = offer === null ? "" : lang === "de"
-    ? `Hallo! Ich interessiere mich für den Artikel „${name}“. Aufgrund aktueller Marktpreise biete ich CHF ${offer} bei schneller Abholung an. Passt das für Sie?`
-    : `Bonjour ! Je suis intéressé par l'article « ${name} ». Au vu des prix actuels du marché, je vous propose CHF ${offer} avec retrait rapide. Est-ce que cela vous convient ?`;
+      {open && <Details p={p} />}
+    </article>
+  );
+}
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch { /* navegador sem permissão de cópia */ }
-  }
-
-  if (!teto) return null;
+function Details({ p }: { p: ProductStats }) {
+  const [buy, setBuy] = useState<string>("");
+  const sale = p.pricing.resaleQuick ?? 0;
+  const fee = Math.min(sale * p.feeRate, 290);
+  const cost = p.pricing.recommended?.extraCost ?? 5;
+  const buyN = Number(buy.replace(",", "."));
+  const profit = buyN > 0 && sale ? sale - fee - cost - buyN : null;
 
   return (
-    <Card className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-white">Mensagem de negociação</p>
-        <div className="flex rounded-lg bg-black/30 p-0.5 ring-1 ring-white/10">
-          {(["de", "fr"] as const).map((l) => (
-            <button
-              key={l}
-              onClick={() => setLang(l)}
-              className={`min-h-9 rounded-md px-3 text-xs font-semibold uppercase ${lang === l ? "bg-white/15 text-white" : "text-slate-400"}`}
-            >
-              {l}
-            </button>
+    <div className="space-y-4 border-t border-white/5 p-4 text-sm">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+        <span className="flex items-center gap-1"><Info className="h-3.5 w-3.5" /> Base: {BASIS[p.pricing.basis]}</span>
+        <span>Confiança: <b className={CONF[p.pricing.confidence]}>{p.pricing.confidence}</b></span>
+        <span>Comissão: {Math.round(p.feeRate * 100)} %</span>
+        <a href={p.searchUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-sky-300">Ver no Ricardo <ExternalLink className="h-3 w-3" /></a>
+      </div>
+
+      <table className="tabular w-full text-left">
+        <thead className="text-[11px] uppercase tracking-wide text-slate-500">
+          <tr><th className="py-1 font-normal">Amostra</th><th className="font-normal">n</th><th className="font-normal">Média</th><th className="font-normal">Mediana</th><th className="font-normal">P25–P75</th><th className="hidden font-normal sm:table-cell">Mín–Máx</th></tr>
+        </thead>
+        <tbody className="text-slate-200">
+          {([
+            [<><TrendingUp className="mr-1 inline h-3.5 w-3.5 text-emerald-300" />Vendidos</>, p.sold],
+            [<><Gavel className="mr-1 inline h-3.5 w-3.5 text-sky-300" />Leilões ≥3 lances</>, p.active.auctionBids],
+            [<><Tag className="mr-1 inline h-3.5 w-3.5 text-orange-300" />Sofort pedidos</>, p.active.askingBuyNow],
+          ] as const).map(([label, d], i) => (
+            <tr key={i} className="border-t border-white/5">
+              <td className="py-1.5">{label}</td>
+              <td>{d.n}</td>
+              <td>{chf(d.mean)}</td>
+              <td>{chf(d.median)}</td>
+              <td>{d.n ? `${chf(d.p25)}–${chf(d.p75)}` : "—"}</td>
+              <td className="hidden sm:table-cell">{d.n ? `${chf(d.min)}–${chf(d.max)}` : "—"}</td>
+            </tr>
           ))}
+        </tbody>
+      </table>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl bg-black/20 p-3 ring-1 ring-white/5">
+          <div className="mb-1 flex items-center gap-1 text-xs text-slate-400"><ArrowDownWideNarrow className="h-3.5 w-3.5" /> Cálculo (revenda rápida)</div>
+          {p.pricing.recommended ? (
+            <ul className="tabular space-y-0.5 text-slate-200">
+              <li className="flex justify-between"><span>Venda</span><span>{chf(p.pricing.recommended.salePrice)}</span></li>
+              <li className="flex justify-between text-slate-400"><span>− Comissão Ricardo</span><span>{chf(p.pricing.recommended.fee, 2)}</span></li>
+              <li className="flex justify-between text-slate-400"><span>− Custos (embalagem…)</span><span>{chf(p.pricing.recommended.extraCost)}</span></li>
+              <li className="flex justify-between"><span>= Líquido</span><span>{chf(p.pricing.recommended.net, 2)}</span></li>
+              <li className="flex justify-between font-semibold text-emerald-300"><span>Comprar até</span><span>{chf(p.pricing.recommended.maxBuy)}</span></li>
+              {p.pricing.ceiling?.maxBuy && <li className="flex justify-between text-xs text-slate-500"><span>Teto absoluto (vendendo à mediana)</span><span>{chf(p.pricing.ceiling.maxBuy)}</span></li>}
+            </ul>
+          ) : <p className="text-slate-400">Sem dados suficientes.</p>}
+        </div>
+        <div className="rounded-xl bg-black/20 p-3 ring-1 ring-white/5">
+          <div className="mb-1 flex items-center gap-1 text-xs text-slate-400"><ShoppingBag className="h-3.5 w-3.5" /> Calculadora: vale a pena?</div>
+          <input inputMode="decimal" placeholder="Preço que te pedem (CHF)" value={buy} onChange={(e) => setBuy(e.target.value)}
+            className="mb-2 w-full rounded-lg bg-slate-800 px-3 py-2 text-slate-100 ring-1 ring-white/10 placeholder:text-slate-500" />
+          {profit !== null && (
+            <p className={profit >= (p.pricing.recommended?.profitAtMaxBuy ?? 40) * 0.8 ? "text-emerald-300" : profit > 0 ? "text-amber-300" : "text-rose-300"}>
+              Lucro estimado: <b className="tabular">{chf(profit)}</b> ({Math.round((profit / buyN) * 100)} %)
+            </p>
+          )}
         </div>
       </div>
-      <Segmented
-        label="Oferta inicial"
-        value={String(discount)}
-        onChange={(v) => setDiscount(Number(v))}
-        options={[["0", "No teto"], ["0.1", "Teto −10%"], ["0.2", "Teto −20%"]]}
-      />
-      <p className="rounded-xl bg-black/30 p-3 text-sm leading-relaxed text-slate-200 ring-1 ring-white/10">{text}</p>
-      <button
-        onClick={copy}
-        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-white/10 font-semibold text-white ring-1 ring-white/15 active:bg-white/20"
-      >
-        {copied ? <Check size={18} aria-hidden /> : <Copy size={18} aria-hidden />}
-        {copied ? "Copiado!" : `Copiar mensagem (CHF ${offer})`}
-      </button>
-    </Card>
-  );
-}
 
-// ─────────────────────────────── Distribuição de preços ───────────────────────────────
-
-function Distribution({ rows }: { rows: Row[] }) {
-  const data = useMemo(() => {
-    const auction = rows.filter((r) => r.mode === "auction" && r.bids >= AUCTION_MIN_BIDS).map((r) => r.price);
-    const buynow = rows.map((r) => r.buyNowPrice).filter((v): v is number => typeof v === "number");
-    const all = [...auction, ...buynow];
-    if (all.length < 3) return null;
-    const lo = Math.min(...all), hi = Math.max(...all);
-    const bins = 7, step = Math.max(1, Math.ceil((hi - lo + 1) / bins));
-    const out = Array.from({ length: bins }, (_, i) => ({
-      faixa: `${Math.round(lo + i * step)}`,
-      label: `CHF ${Math.round(lo + i * step)}–${Math.round(lo + (i + 1) * step)}`,
-      Leilão: 0,
-      Sofort: 0,
-    }));
-    const idx = (v: number) => Math.min(bins - 1, Math.floor((v - lo) / step));
-    auction.forEach((v) => out[idx(v)].Leilão++);
-    buynow.forEach((v) => out[idx(v)].Sofort++);
-    return out;
-  }, [rows]);
-
-  if (!data) return null;
-
-  return (
-    <Card>
-      <p className="mb-1 text-sm font-semibold text-white">Distribuição de preços</p>
-      <p className="mb-2 text-[11px] text-slate-500">Nº de anúncios por faixa de preço (CHF)</p>
-      <div className="h-44">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 4, right: 4, left: -24, bottom: 0 }} barCategoryGap={2}>
-            <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" />
-            <XAxis dataKey="faixa" tick={{ fill: "#94a3b8", fontSize: 10 }} axisLine={false} tickLine={false} />
-            <YAxis allowDecimals={false} tick={{ fill: "#94a3b8", fontSize: 10 }} axisLine={false} tickLine={false} />
-            <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.05)" }}
-              contentStyle={{ background: "#0b0f17", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, fontSize: 12 }}
-              labelStyle={{ color: "#e5e7eb" }}
-              itemStyle={{ color: "#cbd5e1" }}
-              labelFormatter={(_, p) => (p?.[0]?.payload as { label?: string })?.label ?? ""}
-            />
-            <Legend wrapperStyle={{ fontSize: 11, color: "#cbd5e1" }} iconType="circle" iconSize={8} />
-            <Bar dataKey="Leilão" stackId="a" fill={COLOR_AUCTION} stroke="#0b0f17" strokeWidth={2} />
-            <Bar dataKey="Sofort" stackId="a" fill={COLOR_BUYNOW} stroke="#0b0f17" strokeWidth={2} radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </Card>
-  );
-}
-
-// ─────────────────────────────── Lista de anúncios ───────────────────────────────
-
-function Listings({ rows, sourceUrl }: { rows: Row[]; sourceUrl: string }) {
-  const [open, setOpen] = useState(false);
-  const top = [...rows].sort((a, b) => b.bids - a.bids).slice(0, open ? 25 : 5);
-  if (!rows.length) return null;
-
-  return (
-    <Card>
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-sm font-semibold text-white">Anúncios usados no cálculo</p>
-        <a href={sourceUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-emerald-300">
-          Ricardo <ExternalLink size={12} aria-hidden />
-        </a>
-      </div>
-      <ul className="divide-y divide-white/5">
-        {top.map((r) => (
-          <li key={r.id}>
-            <a href={r.url} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-3 py-2.5">
-              <span className="min-w-0">
-                <span className="block truncate text-sm text-slate-200">{r.title}</span>
-                <span className="text-[11px] text-slate-500">
-                  {r.mode === "auction" ? `Leilão · ${r.bids} lances` : "Sofort-Kaufen"}
-                  {r.condition && r.condition !== "Unbekannt" ? ` · ${r.condition}` : ""}
-                </span>
-              </span>
-              <span className="tabular shrink-0 text-right text-sm text-white">
-                {chf(r.price)}
-                {r.mode === "auction" && r.buyNowPrice ? (
-                  <span className="block text-[11px] text-slate-500">Sofort {chf(r.buyNowPrice)}</span>
-                ) : null}
-              </span>
-            </a>
-          </li>
-        ))}
-      </ul>
-      {rows.length > 5 && (
-        <button onClick={() => setOpen(!open)} className="mt-2 min-h-10 w-full text-xs text-slate-400">
-          {open ? "Mostrar menos" : `Mostrar mais (${Math.min(rows.length, 25)})`}
-        </button>
+      {p.weekly.length > 1 && (
+        <div className="h-40">
+          <div className="mb-1 text-xs text-slate-400">Mediana vendida por semana</div>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={p.weekly}>
+              <XAxis dataKey="week" tick={{ fontSize: 10, fill: "#94a3b8" }} tickFormatter={(w: string) => w.slice(5)} />
+              <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} width={40} />
+              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", fontSize: 12 }} formatter={(v: number) => chf(v)} />
+              <Bar dataKey="median" fill="#10b981" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       )}
-    </Card>
-  );
-}
 
-// ─────────────────────────────── Componentes base ───────────────────────────────
+      {p.opportunities.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs text-slate-400">Oportunidades ativas</div>
+          <ul className="divide-y divide-white/5">
+            {p.opportunities.map((o) => (
+              <li key={o.id + o.kind} className="flex items-center justify-between gap-2 py-1.5">
+                <a href={o.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate text-slate-200 hover:text-white">{o.title}</a>
+                <span className="tabular shrink-0 text-xs">
+                  {o.kind === "auction" ? `lance ${chf(o.price)} (${o.bids})` : chf(o.price)} · <span className="text-emerald-300">+{chf(o.estProfit)}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
-function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <section className={`rounded-2xl bg-white/[0.06] p-4 shadow-lg shadow-black/20 ring-1 ring-white/10 backdrop-blur-xl ${className}`}>
-      {children}
-    </section>
-  );
-}
-
-function StatCard({ icon, color, title, sub, s }: { icon: React.ReactNode; color: string; title: string; sub: string; s: ModeStats }) {
-  return (
-    <Card className="!p-3">
-      <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
-        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color }} aria-hidden />
-        {icon} {title}
+      <p className="text-xs text-slate-500">
+        Última leitura: {p.tracking.lastFound} anúncios, {p.tracking.lastRelevant} relevantes · {p.counts.rejectedActive} descartados (acessórios/outros modelos) ·
+        {" "}{p.counts.soldConfirmed} vendas confirmadas, {p.counts.soldInferred} inferidas, {p.counts.endedUnsold} sem venda, {p.counts.pendingCheck} por verificar ·
+        {" "}{p.tracking.runs24h} recolhas nas últimas 24 h · <a className="text-sky-300" href={`/api/listings?productId=${p.productId}`} target="_blank" rel="noreferrer">dados brutos</a>
       </p>
-      <p className="tabular mt-1 text-2xl font-bold text-white">{chf(s.median)}</p>
-      <p className="text-[11px] text-slate-500">{sub}</p>
-      <p className="tabular mt-1 text-[11px] text-slate-400">
-        {s.count ? `${s.count} amostras · ${chf(s.min)}–${chf(s.max)}` : "sem amostras"}
-      </p>
-    </Card>
-  );
-}
-
-function Segmented({
-  label, value, onChange, options,
-}: { label: string; value: string; onChange: (v: string) => void; options: [string, string][] }) {
-  return (
-    <div>
-      <p className="mb-1 text-[11px] uppercase tracking-wider text-slate-500">{label}</p>
-      <div className="flex gap-1 rounded-xl bg-black/30 p-1 ring-1 ring-white/10">
-        {options.map(([v, l]) => (
-          <button
-            key={v}
-            onClick={() => onChange(v)}
-            className={`min-h-10 flex-1 rounded-lg px-2 text-xs font-medium transition ${
-              value === v ? "bg-emerald-500 text-emerald-950" : "text-slate-300"
-            }`}
-          >
-            {l}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

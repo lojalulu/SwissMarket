@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "noEmit": true, "incremental": false, "plugins": [] },
+  "include": ["scripts/**/*.ts", "lib/**/*.ts", "config/**/*.ts"],
+  "exclude": ["node_modules"]
+}
