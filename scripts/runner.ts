@@ -25,7 +25,7 @@ import { isChallengePage, parseDetailPage, parseRscText, parseSearchPage, search
 import { checkRelevance } from '../lib/text';
 import type { DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '3.2.0';
+const VERSION = '3.3.0';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────
@@ -62,6 +62,8 @@ const CFG = {
   recheck: flag('recheck'),
   // Espreitar leilões ~10 min antes do fim, entre ciclos (--no-closing desliga).
   closing: !flag('no-closing'),
+  // Quantos minutos antes do fim fazer a leitura final (o Chromium do telemóvel precisa de ~30 s).
+  closingLeadMs: Number(process.env.CLOSING_LEAD_MIN || 4) * 60e3,
   inspect: opt('inspect'),
   debugDir: path.join(ROOT, 'data', 'debug'),
   // Perfil antigo (v2.0.1) — apagado ao arrancar: um perfil reutilizado era MAIS bloqueado.
@@ -546,7 +548,7 @@ async function cycle() {
 // que a Cloudflare bloqueia). Leilões que terminam juntos (±20 min) partilham a mesma leitura.
 
 async function closingWatch(until: number, stopped: () => boolean) {
-  let items: { productId: string; id: string; endDate: string }[] = [];
+  let items: { productId: string; id: string; endDate: string; bids: number }[] = [];
   try {
     const within = Math.ceil((until - Date.now()) / 60e3) + 15;
     items = (await api<{ items: typeof items }>('GET', `/api/closing?within=${within}`)).items;
@@ -554,30 +556,39 @@ async function closingWatch(until: number, stopped: () => boolean) {
     warn(`Espreitar leilões: sem lista (${(e as Error).message})`);
     return;
   }
-  // agrupa por produto + janela de 20 min
-  const slots: { productId: string; at: number; count: number }[] = [];
-  for (const it of items) {
-    const at = new Date(it.endDate).getTime() - 10 * 60e3;
-    const s = slots.find((x) => x.productId === it.productId && Math.abs(x.at - at) <= 20 * 60e3);
-    if (s) { s.count++; s.at = Math.min(s.at, at); } else slots.push({ productId: it.productId, at, count: 1 });
+  // Agrupa por produto: leilões que acabam até 6 min depois do 1º do grupo partilham a mesma leitura.
+  type Slot = { productId: string; firstEnd: number; lastEnd: number; count: number; maxBids: number; at: number; followUp: boolean };
+  const slots: Slot[] = [];
+  for (const it of items.sort((a, b) => a.endDate.localeCompare(b.endDate))) {
+    const end = new Date(it.endDate).getTime();
+    const s = slots.find((x) => x.productId === it.productId && !x.followUp && end - x.firstEnd <= 6 * 60e3);
+    if (s) { s.count++; s.lastEnd = Math.max(s.lastEnd, end); s.maxBids = Math.max(s.maxBids, it.bids); }
+    else slots.push({ productId: it.productId, firstEnd: end, lastEnd: end, count: 1, maxBids: it.bids, at: end - CFG.closingLeadMs, followUp: false });
   }
-  slots.sort((a, b) => a.at - b.at);
-  const plan = slots.slice(0, 25);
+  const plan = slots.slice(0, 30);
   if (!plan.length) return;
-  log(`⏱  ${items.length} leilão(ões) acabam antes do próximo ciclo → ${plan.length} espreitadela(s) agendada(s)`);
-  for (const slot of plan) {
-    while (!stopped() && Date.now() < slot.at) await sleep(5000);
-    if (stopped() || Date.now() > until) return;
+  log(`⏱  ${items.length} leilão(ões) acabam antes do próximo ciclo → ${plan.length} leitura(s) agendada(s) ~${Math.round(CFG.closingLeadMs / 60e3)} min antes do fim`);
+
+  const peek = async (slot: Slot) => {
     const p = getProduct(slot.productId);
-    if (!p) continue;
-    log(`⏱  ${p.name}: ${slot.count} leilão(ões) a acabar — a ler lances finais…`);
+    if (!p) return;
+    log(`⏱  ${p.name}: ${slot.count} leilão(ões) ${slot.followUp ? 'prolongado(s)? — 2ª leitura' : 'a acabar — leitura final'}…`);
     const session = new BrowserSession();
-    try {
-      await scrapeProduct(session, { ...p, extraSearchTerms: [] });
-    } catch (e) {
-      warn(`Espreitadela falhou: ${(e as Error).message}`);
-    } finally {
-      await session.close();
+    try { await scrapeProduct(session, { ...p, extraSearchTerms: [] }); }
+    catch (e) { warn(`Leitura falhou: ${(e as Error).message}`); }
+    finally { await session.close(); }
+  };
+
+  while (plan.length) {
+    plan.sort((a, b) => a.at - b.at);
+    const slot = plan.shift()!;
+    while (!stopped() && Date.now() < slot.at) await sleep(3000);
+    if (stopped() || Date.now() > until) return;
+    await peek(slot);
+    // Leilão disputado: no Ricardo, um lance nos últimos 3 min prolonga +3 min (repetidamente).
+    // 2ª leitura logo após o fim previsto: se ainda aparecer na pesquisa, apanhamos o lance mais recente.
+    if (!slot.followUp && slot.maxBids >= 5) {
+      plan.push({ ...slot, followUp: true, at: slot.lastEnd + 2 * 60e3 });
     }
   }
 }

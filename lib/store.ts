@@ -208,7 +208,7 @@ export function closingSoon(withinMin: number, now = new Date()) {
   const nowMs = now.getTime();
   return Object.values(db.listings)
     .filter((r) => r.relevant && r.status === 'active' && r.mode !== 'buynow' && r.bids > 0 && r.endDate)
-    .map((r) => ({ productId: r.productId, id: r.id, endDate: r.endDate! }))
+    .map((r) => ({ productId: r.productId, id: r.id, endDate: r.endDate!, bids: r.bids }))
     .filter((x) => { const t = new Date(x.endDate).getTime(); return t > nowMs && t - nowMs <= withinMin * 60e3; })
     .sort((a, b) => a.endDate.localeCompare(b.endDate));
 }
