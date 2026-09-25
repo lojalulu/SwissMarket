@@ -86,7 +86,52 @@ function priceValue(v: unknown): number | null {
 
 // ─────────────────────── JSON embutido na página ───────────────────────
 
-export function extractJsonBlobs(html: string): { nextData: unknown | null; ldJson: unknown[] } {
+/**
+ * O Ricardo usa o App Router do Next.js: os dados vêm em `self.__next_f.push([1,"…"])` (payload RSC),
+ * incluindo o estado do React Query com cada anúncio {id,title,bidPrice,buyNowPrice,bidsCount,endDate,…}.
+ */
+export function extractRscRoots(html: string): unknown[] {
+  const re = /self\.__next_f\.push\(\[1,\s*"((?:[^"\\]|\\.)*)"\]\)/g;
+  let text = '';
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    try { text += JSON.parse(`"${m[1]}"`); } catch { /* chunk inválido */ }
+  }
+  if (!text) return [];
+  const roots: unknown[] = [];
+  // 1) cada linha RSC é "<id>:<json>"
+  for (const line of text.split('\n')) {
+    const c = line.indexOf(':');
+    if (c < 1 || c > 8) continue;
+    const payload = line.slice(c + 1);
+    if (!/^[\[{]/.test(payload)) continue;
+    try { roots.push(JSON.parse(payload)); } catch { /* linha partida ou não-JSON */ }
+  }
+  // 2) plano B: extrai objetos {"id":"123456…",…} com chavetas equilibradas
+  if (!roots.length) {
+    const idRe = /\{"id":"?\d{6,}/g;
+    let im: RegExpExecArray | null;
+    while ((im = idRe.exec(text))) {
+      const obj = balancedObject(text, im.index);
+      if (obj) { try { roots.push(JSON.parse(obj)); } catch { /* ignora */ } }
+    }
+  }
+  return roots;
+}
+
+function balancedObject(s: string, start: number): string | null {
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length && i - start < 20000; i++) {
+    const ch = s[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) return s.slice(start, i + 1); }
+  }
+  return null;
+}
+
+export function extractJsonBlobs(html: string): { nextData: unknown | null; ldJson: unknown[]; rsc: unknown[] } {
   let nextData: unknown | null = null;
   const nd = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
   if (nd) {
@@ -98,7 +143,7 @@ export function extractJsonBlobs(html: string): { nextData: unknown | null; ldJs
   while ((m = re.exec(html))) {
     try { ldJson.push(JSON.parse(m[1])); } catch { /* ignora bloco inválido */ }
   }
-  return { nextData, ldJson };
+  return { nextData, ldJson, rsc: extractRscRoots(html) };
 }
 
 type Obj = Record<string, unknown>;
@@ -128,6 +173,7 @@ const K = {
   bids: /^(bidsCount|bidCount|bids_count|numberOfBids|nrOfBids|bidsNumber|bids)$/i,
   end: /^(endDate|endTime|endsAt|end_date|closingDate|auctionEnd|endingAt|availabilityEnds)$/i,
   cond: /^(condition|conditionKey|itemCondition|condition_key|conditionLabel)$/i,
+  start_: /^(startDate|creationDate|start_date|createdAt)$/i,
   hasAuction: /^(hasAuction|isAuction|has_auction|auction)$/i,
   hasBuyNow: /^(hasBuyNow|isBuyNow|has_buy_now|buyNowEnabled)$/i,
   ended: /^(hasEnded|isEnded|ended|isClosed|isFinished|is_ended)$/i,
@@ -186,7 +232,8 @@ function listingFromObject(o: Obj, source: string): Partial<ScrapedListing> & { 
   if (hasBuyNow === false) buyNow = null;
 
   let mode: SaleMode | undefined;
-  if (hasAuction === true || bids !== null || bid) mode = buyNow ? 'hybrid' : 'auction';
+  if (hasAuction === false) mode = buyNow ? 'buynow' : undefined;
+  else if (hasAuction === true || bid || (bids ?? 0) > 0) mode = buyNow ? 'hybrid' : 'auction';
   else if (buyNow) mode = 'buynow';
 
   return {
@@ -198,6 +245,7 @@ function listingFromObject(o: Obj, source: string): Partial<ScrapedListing> & { 
     buyNowPrice: buyNow,
     bids: bids ?? undefined,
     endDate: toIso(pick(o, K.end)),
+    startDate: toIso(pick(o, K.start_)),
     condition: conditionText(pick(o, K.cond)),
     source,
   };
@@ -224,14 +272,60 @@ const PRICE_TEST = new RegExp(PRICE_RE.source);
 const BIDS_RE = /\(?\s*(\d+)\s*(?:Gebote?|offres?|offerte?|bids?)\s*\)?/i;
 const BUYNOW_RE = /Sofort kaufen|Achat imm[ée]diat|Acquista subito|Compra subito|Buy now/i;
 
-/** Tempo restante escrito no card → data de fim aproximada (ex.: "3T 4Std", "heute 21:30"). */
+const BADGES = /^(Beliebt|Boost|Neuheit|Neu|Top|Highlight|Populaire|Nouveau|Popolare|Novit[aà])$/i;
+
+const MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, mär: 2, maer: 2, apr: 3, mai: 4, may: 4, jun: 5, jul: 6, aug: 7, sep: 8,
+  okt: 9, oct: 9, nov: 10, dez: 11, dec: 11, janv: 0, fevr: 1, févr: 1, avr: 3, juin: 5, juil: 6, aout: 7, août: 7,
+  gen: 0, mag: 4, giu: 5, lug: 6, ago: 7, set: 8, ott: 9, dic: 11,
+};
+
+/** Converte data/hora "de parede" em Zurique para ISO UTC (trata horário de verão). */
+export function zurichToIso(y: number, mo: number, d: number, h: number, mi: number): string {
+  const guess = Date.UTC(y, mo, d, h, mi);
+  let offsetMin = 60;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Zurich', timeZoneName: 'shortOffset' })
+      .formatToParts(new Date(guess)).find((p) => p.type === 'timeZoneName')?.value ?? 'GMT+1';
+    const m = parts.match(/GMT([+-]\d+)(?::(\d+))?/);
+    if (m) offsetMin = Number(m[1]) * 60 + Math.sign(Number(m[1])) * Number(m[2] ?? 0);
+  } catch {
+    offsetMin = mo >= 3 && mo <= 9 ? 120 : 60; // aproximação sem Intl
+  }
+  return new Date(guess - offsetMin * 60e3).toISOString();
+}
+
+function zurichToday(now: Date): { y: number; mo: number; d: number } {
+  try {
+    const f = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Zurich', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+    const [y, mo, d] = f.split('-').map(Number);
+    return { y, mo: mo - 1, d };
+  } catch {
+    return { y: now.getFullYear(), mo: now.getMonth(), d: now.getDate() };
+  }
+}
+
+/**
+ * Data de fim escrita no card → ISO. Formatos vistos no Ricardo:
+ *   "Di, 29 Sep., 16:00" · "Morgen, 13:37" · "Heute, 21:30" · "3T 4Std" · "5Std 12Min"
+ */
 export function parseTimeLeft(text: string, now: Date): string | null {
+  const t = zurichToday(now);
+  const abs = text.match(/(\d{1,2})\.?\s+([A-Za-zÄäÖöÜüéû]{3,5})\.?,?\s+(\d{1,2}):(\d{2})/);
+  if (abs) {
+    const key = abs[2].toLowerCase();
+    const mo = MONTHS[key.slice(0, 4)] ?? MONTHS[key.slice(0, 3)];
+    if (mo !== undefined) {
+      let y = t.y;
+      if (mo < t.mo - 6) y++; // dezembro → janeiro
+      return zurichToIso(y, mo, Number(abs[1]), Number(abs[3]), Number(abs[4]));
+    }
+  }
   const hm = text.match(/(heute|morgen|aujourd'hui|demain|oggi|domani)[,\s|]*(\d{1,2}):(\d{2})/i);
   if (hm) {
-    const d = new Date(now);
-    if (/morgen|demain|domani/i.test(hm[1])) d.setDate(d.getDate() + 1);
-    d.setHours(Number(hm[2]), Number(hm[3]), 0, 0);
-    return d.toISOString();
+    const add = /morgen|demain|domani/i.test(hm[1]) ? 1 : 0;
+    const base = new Date(Date.UTC(t.y, t.mo, t.d + add));
+    return zurichToIso(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), Number(hm[2]), Number(hm[3]));
   }
   const days = text.match(/(\d+)\s*(?:T|Tage?|j|jours?|g|giorni?)\b/i);
   const hours = text.match(/(\d+)\s*(?:Std|h|Stunden?|heures?|ore)\b/i);
@@ -289,7 +383,7 @@ export function parseCardsHtml(html: string, now = new Date()): Map<string, Scra
       bidPrice,
       buyNowPrice,
       bids,
-      endDate: mode === 'buynow' ? null : parseTimeLeft(text.split(title).join(' '), now),
+      endDate: parseTimeLeft(text.split(title).join(' '), now),
       condition: null,
       source: 'html',
     };
@@ -303,12 +397,16 @@ export function parseCardsHtml(html: string, now = new Date()): Map<string, Scra
 }
 
 function extractCardTitle(inner: string, text: string, href: string): string {
-  const alt = inner.match(/\balt="([^"]{4,})"/i)?.[1];
-  if (alt && !/icon|logo|avatar/i.test(alt)) return decodeEntities(alt).slice(0, 200);
+  // Foto do produto (ignora ícones/etiquetas como "Beliebt", "Boost", "Neuheit")
+  for (const img of inner.match(/<img\b[^>]*>/gi) ?? []) {
+    const src = img.match(/\bsrc="([^"]*)"/i)?.[1] ?? '';
+    const alt = img.match(/\balt="([^"]{4,})"/i)?.[1];
+    if (alt && !/\/icons?\/|\.svg/i.test(src) && !/icon|logo|avatar/i.test(alt)) return decodeEntities(alt).slice(0, 200);
+  }
   const titleAttr = inner.match(/\btitle="([^"]{4,})"/i)?.[1];
   if (titleAttr) return decodeEntities(titleAttr).slice(0, 200);
   // 1º bloco de texto que não é preço / lances / tempo
-  const block = text.split(' | ').map((s) => s.trim()).find((s) =>
+  const block = text.split(' | ').map((s) => s.trim()).find((s) => !BADGES.test(s) &&
     s.length >= 6 && !PRICE_TEST.test(s) && !BIDS_RE.test(s) && !BUYNOW_RE.test(s) && /[a-z]{3}/i.test(s));
   if (block) return block.slice(0, 200);
   const slug = href.match(/\/a\/(.*?)-\d{6,}/)?.[1] ?? '';
@@ -353,8 +451,10 @@ export function parseSearchPage(html: string, now = new Date()): SearchParseResu
   if (isChallengePage(html)) return { items: [], challenge: true, sources: { nextData: 0, ldJson: 0, html: 0 } };
 
   const cards = parseCardsHtml(html, now);
-  const { nextData, ldJson } = extractJsonBlobs(html);
-  const fromNext = nextData ? listingsFromJson(nextData, 'next-data') : new Map();
+  const { nextData, ldJson, rsc } = extractJsonBlobs(html);
+  const fromNext = nextData ? listingsFromJson(nextData, 'next-data') : new Map<string, Partial<ScrapedListing> & { id: string }>();
+  // Payload RSC (App Router): mesma riqueza do __NEXT_DATA__ → trata como "next-data"
+  if (rsc.length) for (const [k, v] of listingsFromJson(rsc, 'next-data')) if (!fromNext.has(k)) fromNext.set(k, v);
   const fromLd = new Map<string, Partial<ScrapedListing> & { id: string }>();
   for (const blob of ldJson) for (const [k, v] of listingsFromJson(blob, 'json-ld')) fromLd.set(k, v);
 
@@ -383,10 +483,13 @@ export function parseSearchPage(html: string, now = new Date()): SearchParseResu
       if (json.bids !== undefined && json.bids !== null) merged.bids = json.bids;
       if (json.endDate) merged.endDate = json.endDate;           // data exata > estimativa do card
       if (json.title && json.title.length > 3) merged.title = json.title;
-      merged.mode = merged.bids > 0 || merged.bidPrice !== null
-        ? (merged.buyNowPrice ? 'hybrid' : 'auction')
-        : 'buynow';
-      if (json.mode && merged.bids === 0 && merged.bidPrice === null) merged.mode = json.mode;
+      merged.mode = json.mode === 'buynow'
+        ? 'buynow'
+        : merged.bids > 0 || merged.bidPrice !== null
+          ? (merged.buyNowPrice ? 'hybrid' : 'auction')
+          : 'buynow';
+      if (merged.mode === 'buynow') { merged.bidPrice = null; merged.bids = 0; }
+      if (json.startDate) merged.startDate = json.startDate;
       base = merged;
     }
     if (!base.title || (base.bidPrice === null && base.buyNowPrice === null)) continue;
@@ -413,13 +516,13 @@ export function parseDetailPage(id: string, html: string, finalUrl?: string): De
   };
   if (finalUrl && idFromUrl(finalUrl) !== id && !finalUrl.includes(id)) return { ...base, removed: true };
 
-  const { nextData, ldJson } = extractJsonBlobs(html);
+  const { nextData, ldJson, rsc } = extractJsonBlobs(html);
   const text = htmlToText(html);
 
   // 1) JSON estruturado — procura o objeto do próprio anúncio.
   let endedFlag: boolean | null = null;
   let soldFlag = false;
-  for (const root of [nextData, ...ldJson]) {
+  for (const root of [nextData, ...ldJson, ...rsc]) {
     if (!root) continue;
     for (const o of objects(root)) {
       const oid = pick(o, K.id);

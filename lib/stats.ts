@@ -167,7 +167,9 @@ export function computeProductStats(
   const fresh = active.filter((r) => new Date(r.lastSeen).getTime() >= freshCut);
   const asking = fresh.map((r) => r.buyNowPrice).filter(inBand) as number[];
   const auctions = fresh.filter((r) => r.mode !== 'buynow');
-  const hotBids = auctions.filter((r) => r.bids >= 3).map((r) => r.bidPrice).filter(inBand) as number[];
+  // Só leilões a menos de 24 h do fim: antes disso o lance atual ainda está muito abaixo do preço final.
+  const endsWithin24h = (r: ListingRecord) => !r.endDate || new Date(r.endDate).getTime() - nowMs < DAY;
+  const hotBids = auctions.filter((r) => r.bids >= 3 && endsWithin24h(r)).map((r) => r.bidPrice).filter(inBand) as number[];
   const auctionsWithBidsPct = auctions.length >= 3 ? Math.round((auctions.filter((r) => r.bids > 0).length / auctions.length) * 100) : null;
   const avgBids = auctions.length >= 3 ? r2(auctions.reduce((a, r) => a + r.bids, 0) / auctions.length) : null;
 
@@ -193,7 +195,7 @@ export function computeProductStats(
   if (daysTracked >= 3 && closedCount + probable.length >= 3) {
     const salesPer30d = r2((salesCount / effDays) * 30);
     const sellThrough = closedCount ? Math.round((sold.length / closedCount) * 100) : null;
-    const daysToSell = sold.map((r) => (new Date(r.closedAt!).getTime() - new Date(r.firstSeen).getTime()) / DAY).filter((d) => d >= 0).sort((a, b) => a - b);
+    const daysToSell = sold.map((r) => (new Date(r.closedAt!).getTime() - new Date(r.startDate ?? r.firstSeen).getTime()) / DAY).filter((d) => d >= 0).sort((a, b) => a - b);
     const medDays = daysToSell.length ? Math.round(quantile(daysToSell, 0.5) * 10) / 10 : null;
     const score = Math.round(
       Math.min(salesPer30d * 2.5, 50) +

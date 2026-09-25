@@ -109,7 +109,7 @@ export function ingest(payload: IngestPayload): IngestResult {
       db.listings[k] = {
         id: item.id, productId: p.id, title: item.title, url: item.url, mode: item.mode,
         bidPrice: item.bidPrice, buyNowPrice: item.buyNowPrice, bids: item.bids,
-        endDate: item.endDate, condition: item.condition,
+        endDate: item.endDate, startDate: item.startDate ?? null, condition: item.condition,
         relevant, rejectReason: reason,
         firstSeen: now, lastSeen: now, seenCount: 1, history: [snap],
         status: 'active', finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null,
@@ -131,6 +131,7 @@ export function ingest(payload: IngestPayload): IngestResult {
         // Data exata vinda do JSON > estimativa pelo texto do card (que varia a cada leitura)
         endDate: item.endDate && (item.source.includes('next') || !prev.endDate) ? item.endDate : prev.endDate,
         condition: item.condition ?? prev.condition,
+        startDate: item.startDate ?? prev.startDate ?? null,
         relevant, rejectReason: reason,
         lastSeen: now,
         seenCount: prev.seenCount + 1,

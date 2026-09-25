@@ -5,6 +5,7 @@
 //   npx tsx scripts/runner.ts --loop 180          # repete a cada ~180 min (com variação aleatória)
 //   npx tsx scripts/runner.ts --only iphone-13,ps5
 //   npx tsx scripts/runner.ts --inspect "iphone 13 128gb"   # diagnóstico: grava o HTML e mostra o que foi lido
+//   npx tsx scripts/runner.ts --inspect https://www.ricardo.ch/de/a/...   # diagnóstico de um anúncio
 //   npx tsx scripts/runner.ts --dry-run           # não envia nada para a VPS
 //   npx tsx scripts/runner.ts --no-recheck        # só pesquisa, sem abrir anúncios terminados
 //
@@ -367,6 +368,17 @@ async function recheckPhase(session: BrowserSession) {
 async function inspect(term: string) {
   const session = new BrowserSession();
   try {
+    // --inspect https://www.ricardo.ch/de/a/...  → diagnóstico da página de UM anúncio
+    if (/^https?:\/\//.test(term)) {
+      const id = term.match(/-(\d{6,})\/?/)?.[1] ?? 'x';
+      const res = await load(session, term, false);
+      fs.mkdirSync(CFG.debugDir, { recursive: true });
+      const f = path.join(CFG.debugDir, `inspect-anuncio-${id}.html`);
+      fs.writeFileSync(f, res.html);
+      log(`HTTP ${res.status} · desafio: ${res.challenge ? 'SIM' : 'não'} → ${path.relative(ROOT, f)}`);
+      console.log(parseDetailPage(id, res.html, res.finalUrl));
+      return;
+    }
     log(`🧪 Diagnóstico de "${term}" → ${searchUrl(term)}`);
     const res = await load(session, searchUrl(term), true);
     fs.mkdirSync(CFG.debugDir, { recursive: true });

@@ -15,6 +15,8 @@ export interface ScrapedListing {
   bids: number;
   /** ISO 8601, quando conhecido. */
   endDate: string | null;
+  /** Quando o anúncio foi publicado (se o Ricardo informar). */
+  startDate?: string | null;
   condition: string | null;
   /** De onde veio o dado: next-data | json-ld | html */
   source: string;
@@ -64,6 +66,8 @@ export interface ListingRecord {
   relevant: boolean;
   rejectReason?: string;
   firstSeen: string;
+  /** Data de publicação no Ricardo (mais precisa que firstSeen para "dias até vender"). */
+  startDate?: string | null;
   lastSeen: string;
   seenCount: number;
   /** Últimos preços observados (máx. 20) — para ver a evolução dos lances. */
