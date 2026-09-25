@@ -37,7 +37,8 @@ async function runScraper() {
         const searchUrl = `https://www.ricardo.ch/de/s/${encodeURIComponent(product.searchTerm)}`;
         await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // Aguarda até 10 segundos para garantir que os links de anúncios aparecem no DOM
+        // Pausa de segurança para garantir a hidratação do React no site do Ricardo.ch
+        await new Promise((resolve) => setTimeout(resolve, 5000));
         await page.waitForSelector('a[href*="/de/a/"]', { timeout: 10000 }).catch(() => {});
 
         const items = await page.evaluate(() => {
@@ -87,7 +88,7 @@ async function runScraper() {
         console.error(`❌ Erro ao processar o produto ${product.name}:`, productError);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await new Promise((resolve) => setTimeout(resolve, 4000));
     }
 
     console.log('\n✨ [Runner] Ciclo de monitorização concluído com sucesso!');
