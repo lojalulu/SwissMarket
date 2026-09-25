@@ -1,1 +1,11 @@
 node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.env
+.env.local
+# dados vivos da VPS / diagnóstico do runner (não vão para o Git)
+data/db.json
+data/db.json.*
+data/debug/
+data/outbox/
