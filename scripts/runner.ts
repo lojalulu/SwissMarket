@@ -1,10 +1,11 @@
 import puppeteer from 'puppeteer-core';
 import { MONITORED_PRODUCTS } from '../config/products';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://188.245.76.183:3000';
 
 async function runScraper() {
   console.log(`🚀 [Runner] A iniciar ciclo de monitorização para ${MONITORED_PRODUCTS.length} produtos...`);
+  console.log(`🌐 Destino da API: ${API_URL}`);
 
   let browser;
   try {
@@ -35,6 +36,9 @@ async function runScraper() {
       try {
         const searchUrl = `https://www.ricardo.ch/de/s/${encodeURIComponent(product.searchTerm)}`;
         await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // Aguarda até 10 segundos para garantir que os links de anúncios aparecem no DOM
+        await page.waitForSelector('a[href*="/de/a/"]', { timeout: 10000 }).catch(() => {});
 
         const items = await page.evaluate(() => {
           const rawItems: Array<{ id: string; title: string; price: number; link: string }> = [];
