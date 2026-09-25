@@ -298,6 +298,17 @@ function closeStale(db: DB, now: Date) {
   }
 }
 
+/** Fecha leilões terminados sem esperar pelo próximo envio do runner (chamado ao abrir o painel; no máx. 1×/2 min). */
+let lastMaintain = 0;
+export function maintain(now = new Date()) {
+  if (now.getTime() - lastMaintain < 2 * 60e3) return;
+  lastMaintain = now.getTime();
+  const db = load();
+  const before = JSON.stringify(Object.values(db.listings).map((r) => r.status));
+  closeStale(db, now);
+  if (JSON.stringify(Object.values(db.listings).map((r) => r.status)) !== before) save(db);
+}
+
 /** Mantém o ficheiro pequeno: rejeitados antigos e fechados muito antigos saem. */
 function prune(db: DB, now: Date) {
   const nowMs = now.getTime();

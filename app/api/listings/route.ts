@@ -1,12 +1,13 @@
 // GET /api/listings?productId=iphone-13[&status=active|sold|all][&rejected=1] — anúncios brutos para auditoria.
 import { NextResponse } from 'next/server';
 import { getProduct } from '@/config/products';
-import { recordsFor } from '@/lib/store';
+import { maintain, recordsFor } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(req: Request) {
+  maintain();
   const sp = new URL(req.url).searchParams;
   const id = sp.get('productId') ?? '';
   if (!getProduct(id)) return NextResponse.json({ success: false, error: 'productId inválido.' }, { status: 404 });

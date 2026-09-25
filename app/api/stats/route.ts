@@ -2,13 +2,14 @@
 import { NextResponse } from 'next/server';
 import { activeProducts, getProduct } from '@/config/products';
 import { computeProductStats } from '@/lib/stats';
-import { recordsFor, runsFor } from '@/lib/store';
+import { maintain, recordsFor, runsFor } from '@/lib/store';
 import { alertChannels } from '@/lib/alerts';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(req: Request) {
+  maintain();
   const sp = new URL(req.url).searchParams;
   const days = Math.min(Math.max(Number(sp.get('days')) || 30, 1), 180);
   const id = sp.get('productId');
