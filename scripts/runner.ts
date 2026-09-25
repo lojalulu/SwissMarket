@@ -24,7 +24,7 @@ import { isChallengePage, parseDetailPage, parseSearchPage, searchUrl } from '..
 import { checkRelevance } from '../lib/text';
 import type { DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '2.0.2';
+const VERSION = '3.0.0';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────
@@ -315,9 +315,9 @@ async function scrapeProduct(session: BrowserSession, p: ProductConfig): Promise
     return { product: p.name, found: items.length, relevant: localRelevant, newCount: 0, status: 'dry-run' };
   }
   try {
-    const r = await api<{ relevant: number; new: number; rejected: { reason: string; count: number }[] }>('POST', '/api/ingest', payload);
+    const r = await api<{ relevant: number; new: number; alerts?: number; rejected: { reason: string; count: number }[] }>('POST', '/api/ingest', payload);
     const rej = r.rejected.slice(0, 3).map((x) => `${x.reason}×${x.count}`).join(', ');
-    log(`   ✅ VPS: ${r.relevant} relevantes, ${r.new} novos${rej ? ` · rejeitados: ${rej}` : ''}`);
+    log(`   ✅ VPS: ${r.relevant} relevantes, ${r.new} novos${rej ? ` · rejeitados: ${rej}` : ''}${r.alerts && r.alerts > 0 ? ` · 🔔 ${r.alerts} alerta(s) enviado(s)` : ''}`);
     return { product: p.name, found: items.length, relevant: r.relevant, newCount: r.new, status: 'ok' };
   } catch (e) {
     if ((e as any)?.fatal) throw e;

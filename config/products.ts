@@ -60,6 +60,28 @@ export const DEFAULT_EXCLUDE = [
 const IPHONE_EXCLUDE = ['pro', 'max', 'mini', 'plus', 'hulle', 'huelle', 'case', 'cover', 'panzerglas', 'schutzglas', 'folie', 'ladekabel'];
 const MACBOOK_EXCLUDE = ['pro', 'm1 pro', 'm1 max', 'ipad', 'hulle', 'case', 'sleeve', 'tasche', 'netzteil', 'ladegerat', 'tastatur', 'keyboard', 'akku', 'battery'];
 
+
+/** Gera a configuração de um iPhone. baseGB = capacidade base (títulos sem capacidade contam como base). */
+function iphone(
+  gen: number, variant: '' | 'pro' | 'pro max' | 'plus', baseGB: 128 | 256,
+  priceFloor: number, priceCeil: number, extra: Partial<ProductConfig> = {},
+): ProductConfig {
+  const suffix = variant ? ` ${variant.replace(/\b\w/g, (c) => c.toUpperCase())}` : '';
+  const variantInclude: string[][] = variant === 'pro' ? [['pro']] : variant === 'pro max' ? [['pro'], ['max']] : variant === 'plus' ? [['plus']] : [];
+  const variantExclude = variant === 'pro' ? ['max', 'mini', 'plus'] : variant === 'pro max' ? ['mini', 'plus'] : variant === 'plus' ? ['pro', 'max', 'mini'] : ['pro', 'max', 'mini', 'plus'];
+  const bigger = baseGB === 128 ? ['256', '512', '1 tb'] : ['512', '1 tb'];
+  return {
+    id: `iphone-${gen}${variant ? '-' + variant.replace(' ', '-') : ''}`,
+    name: `iPhone ${gen}${suffix} ${baseGB}GB`,
+    category: 'smartphone',
+    searchTerm: `iphone ${gen}${variant ? ' ' + variant : ''}`,
+    mustInclude: [['iphone', 'i phone'], [String(gen)], ...variantInclude],
+    exclude: [...variantExclude, ...bigger, 'hulle', 'huelle', 'case', 'cover', 'panzerglas', 'schutzglas', 'folie', 'ladekabel', 'kamera schutz'],
+    priceFloor, priceCeil, feeRate: 0.10,
+    ...extra,
+  };
+}
+
 export const MONITORED_PRODUCTS: ProductConfig[] = [
   // ─────────────── Smartphones ───────────────
   {
@@ -76,6 +98,27 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     mustInclude: [['iphone', 'i phone'], ['14']],
     exclude: [...IPHONE_EXCLUDE, '256', '512'],
     priceFloor: 200, priceCeil: 850, feeRate: 0.10,
+  },
+
+  // iPhones mais caros = mais margem em CHF por negócio. A liquidez real vai aparecer no painel.
+  iphone(13, 'pro', 128, 200, 800),
+  iphone(13, 'pro max', 128, 250, 900),
+  iphone(14, 'pro', 128, 300, 1000),
+  iphone(14, 'pro max', 128, 350, 1100),
+  iphone(15, '', 128, 300, 900),
+  iphone(15, 'pro', 128, 450, 1150),
+  iphone(15, 'pro max', 256, 550, 1300),
+  iphone(16, '', 128, 450, 1000),
+  iphone(16, 'pro', 128, 600, 1400),
+  iphone(16, 'pro max', 256, 700, 1600),
+  iphone(17, 'pro', 256, 800, 1700),
+  iphone(17, 'pro max', 256, 900, 1900),
+  {
+    id: 'galaxy-s24-ultra', name: 'Samsung Galaxy S24 Ultra', category: 'smartphone',
+    searchTerm: 'galaxy s24 ultra',
+    mustInclude: [['s 24', 's24'], ['ultra']],
+    exclude: ['hulle', 'huelle', 'case', 'cover', 'glas', 'folie', 's 25', 's 23', 'ladekabel', 'pen only', 'nur s pen'],
+    priceFloor: 350, priceCeil: 1100, feeRate: 0.10,
   },
 
   // ─────────────── Portáteis ───────────────
@@ -103,7 +146,51 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     priceFloor: 80, priceCeil: 280, feeRate: 0.12,
   },
 
+  {
+    id: 'airpods-pro-3', name: 'AirPods Pro 3', category: 'electronics',
+    searchTerm: 'airpods pro 3',
+    mustInclude: [['airpods', 'air pods'], ['pro'], ['3', '3 gen', '3rd']],
+    exclude: ['case only', 'nur case', 'ladecase', 'ladeetui', 'nur etui', 'einzeln', 'links', 'rechts', 'left', 'right', 'hulle', 'huelle', 'max', 'pro 2'],
+    priceFloor: 120, priceCeil: 320, feeRate: 0.12,
+  },
+  {
+    id: 'sony-wh1000xm5', name: 'Sony WH-1000XM5', category: 'electronics',
+    searchTerm: 'sony wh-1000xm5',
+    mustInclude: [['sony'], ['xm 5']],
+    exclude: ['xm 4', 'xm 6', 'ohrpolster', 'polster', 'etui', 'case', 'kabel', 'ear pads'],
+    priceFloor: 100, priceCeil: 380, feeRate: 0.12,
+  },
+  {
+    id: 'apple-watch-ultra-2', name: 'Apple Watch Ultra 2', category: 'electronics',
+    searchTerm: 'apple watch ultra 2',
+    mustInclude: [['watch'], ['ultra'], ['2']],
+    exclude: ['armband', 'band', 'strap', 'loop', 'hulle', 'huelle', 'case', 'cover', 'schutz', 'glas', 'ladekabel', 'ladegerat', 'ultra 3'],
+    priceFloor: 300, priceCeil: 900, feeRate: 0.12,
+  },
+  {
+    id: 'dyson-airwrap', name: 'Dyson Airwrap', category: 'electronics',
+    searchTerm: 'dyson airwrap',
+    mustInclude: [['dyson'], ['airwrap']],
+    exclude: ['aufsatz', 'aufsatze', 'duse', 'buerste', 'burste', 'nur', 'halter', 'stander', 'etui', 'ersatz', 'kabel'],
+    priceFloor: 200, priceCeil: 700, feeRate: 0.12,
+  },
+
   // ─────────────── Consolas ───────────────
+  {
+    id: 'switch-2', name: 'Nintendo Switch 2', category: 'gaming',
+    searchTerm: 'nintendo switch 2',
+    mustInclude: [['switch 2', 'switch2']],
+    exclude: ['oled', 'lite', 'hulle', 'huelle', 'case', 'tasche', 'schutzfolie', 'dock only', 'nur dock', 'joy con only', 'grip', 'spiel', 'game key card'],
+    priceFloor: 250, priceCeil: 650, feeRate: 0.12,
+  },
+  {
+    id: 'ps5-pro', name: 'PlayStation 5 Pro', category: 'gaming',
+    searchTerm: 'playstation 5 pro',
+    extraSearchTerms: ['ps5 pro'],
+    mustInclude: [['playstation 5', 'ps 5', 'ps5', 'playstation5'], ['pro']],
+    exclude: ['controller', 'dualsense', 'portal', 'vr', 'cover', 'faceplate', 'ladestation', 'headset', 'laufwerk only', 'nur laufwerk'],
+    priceFloor: 450, priceCeil: 950, feeRate: 0.12,
+  },
   {
     id: 'ps5', name: 'PlayStation 5 (Disc)', category: 'gaming',
     searchTerm: 'playstation 5 konsole',

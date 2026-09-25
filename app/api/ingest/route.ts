@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getProduct } from '@/config/products';
 import { checkToken } from '@/lib/auth';
 import { ingest } from '@/lib/store';
+import { runAlertsFor } from '@/lib/alerts';
 import type { IngestPayload } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -38,5 +39,9 @@ export async function POST(req: Request) {
       bids: 0, endDate: null, condition: null, source: 'legacy',
     })).filter((it: any) => it.bidPrice !== null || it.buyNowPrice !== null),
   });
-  return NextResponse.json({ success: true, ...result });
+  // Alertas: não bloqueiam a resposta ao runner se o ntfy/Telegram estiver lento.
+  let alerts = 0;
+  try { alerts = await Promise.race([runAlertsFor(body.productId), new Promise<number>((r) => setTimeout(() => r(-1), 15000))]); }
+  catch (e) { console.error('[alerts]', e); }
+  return NextResponse.json({ success: true, ...result, alerts });
 }

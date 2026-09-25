@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
-  ArrowDownWideNarrow, ChevronDown, ExternalLink, Flame, Gavel, Info, Loader2, RefreshCw, ShoppingBag, Tag, TrendingUp,
+  ArrowDownWideNarrow, Bell, BellOff, Check, ChevronDown, Copy, ExternalLink, Gavel, HeartHandshake as Handshake, Info, Loader2, MapPin, Radar,
+  RefreshCw, ShoppingBag, Tag, Timer, TrendingUp, Trophy, Zap,
 } from "lucide-react";
 import type { ProductStats } from "@/lib/stats";
 
@@ -41,13 +42,18 @@ const BASIS = {
   sem_dados: "sem dados",
 } as const;
 
+type Tab = "radar" | "produtos" | "ranking";
+type RadarKind = "todos" | "buynow" | "auction" | "offer";
+type Opp = ProductStats["opportunities"][number] & { product: string; productId: string; confidence: string; resale: number | null };
+
 export default function Page() {
-  const [data, setData] = useState<{ generatedAt: string; products: ProductStats[] } | null>(null);
+  const [data, setData] = useState<{ generatedAt: string; products: ProductStats[]; alerts?: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(30);
   const [sort, setSort] = useState<SortKey>("liquidez");
   const [open, setOpen] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("radar");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,19 +81,25 @@ export default function Page() {
     return list;
   }, [data, sort]);
 
-  const allOpps = useMemo(
-    () => products.flatMap((p) => p.opportunities.map((o) => ({ ...o, product: p.name }))).sort((a, b) => b.estProfit - a.estProfit),
+  const opps: Opp[] = useMemo(
+    () => products.flatMap((p) => p.opportunities.map((o) => ({
+      ...o, product: p.name, productId: p.productId, confidence: p.pricing.confidence, resale: p.pricing.resaleQuick,
+    }))).sort((a, b) => b.score - a.score),
     [products],
   );
   const lastRun = products.map((p) => p.tracking.lastRun).filter(Boolean).sort().pop() ?? null;
+  const alertsOn = (data?.alerts?.length ?? 0) > 0;
 
   return (
     <main className="mx-auto max-w-5xl px-4 pb-16 pt-6">
-      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-white">SwissMarket Pulse</h1>
           <p className="text-sm text-slate-400">
-            Ricardo.ch · última recolha {ago(lastRun)} · {products.length} produtos
+            Ricardo.ch · última recolha {ago(lastRun)} · {products.length} produtos ·{" "}
+            <span className={alertsOn ? "text-emerald-300" : "text-slate-500"}>
+              {alertsOn ? <><Bell className="inline h-3.5 w-3.5" /> alertas ligados</> : <><BellOff className="inline h-3.5 w-3.5" /> alertas desligados</>}
+            </span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -95,42 +107,26 @@ export default function Page() {
             className="rounded-lg bg-slate-800/80 px-2 py-1.5 text-sm text-slate-200 ring-1 ring-white/10">
             {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} dias</option>)}
           </select>
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
-            className="rounded-lg bg-slate-800/80 px-2 py-1.5 text-sm text-slate-200 ring-1 ring-white/10">
-            <option value="liquidez">Mais líquidos</option>
-            <option value="lucro">Maior lucro</option>
-            <option value="nome">Nome</option>
-          </select>
           <button onClick={load} className="rounded-lg bg-slate-800/80 p-2 text-slate-200 ring-1 ring-white/10" aria-label="Atualizar">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           </button>
         </div>
       </header>
 
+      <nav className="mb-5 grid grid-cols-3 gap-1 rounded-xl bg-slate-900/70 p-1 ring-1 ring-white/10">
+        {([
+          ["radar", <><Radar className="mr-1 inline h-4 w-4" />Radar{opps.length ? ` (${opps.length})` : ""}</>],
+          ["produtos", <><ShoppingBag className="mr-1 inline h-4 w-4" />Produtos</>],
+          ["ranking", <><Trophy className="mr-1 inline h-4 w-4" />Ranking</>],
+        ] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`rounded-lg py-2 text-sm ${tab === k ? "bg-emerald-500/15 font-semibold text-emerald-200 ring-1 ring-emerald-400/30" : "text-slate-300"}`}>
+            {label}
+          </button>
+        ))}
+      </nav>
+
       {error && <div className="mb-4 rounded-xl bg-rose-500/10 p-3 text-sm text-rose-200 ring-1 ring-rose-400/30">Erro: {error}</div>}
-
-      {allOpps.length > 0 && (
-        <section className="mb-6 rounded-2xl bg-emerald-500/[0.07] p-4 ring-1 ring-emerald-400/25">
-          <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-emerald-200">
-            <Flame className="h-4 w-4" /> Oportunidades agora ({allOpps.length}) — abaixo do preço máximo de compra
-          </h2>
-          <ul className="divide-y divide-white/5">
-            {allOpps.slice(0, 8).map((o) => (
-              <li key={o.product + o.id + o.kind} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <a href={o.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate text-slate-200 hover:text-white">
-                  <span className="text-slate-400">{o.product} · </span>{o.title}
-                </a>
-                <span className="tabular shrink-0 text-right">
-                  <span className="text-white">{chf(o.price)}</span>
-                  <span className="ml-2 text-emerald-300">+{chf(o.estProfit)}</span>
-                  {o.kind === "auction" && <Gavel className="ml-1 inline h-3.5 w-3.5 text-sky-300" />}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
       {!data && !error && <p className="text-slate-400">A carregar…</p>}
       {data && products.every((p) => !p.tracking.lastRun) && (
         <div className="mb-6 rounded-xl bg-slate-800/60 p-4 text-sm text-slate-300 ring-1 ring-white/10">
@@ -138,17 +134,178 @@ export default function Page() {
         </div>
       )}
 
-      <div className="grid gap-3">
-        {products.map((p) => (
-          <ProductCard key={p.productId} p={p} open={open === p.productId} onToggle={() => setOpen(open === p.productId ? null : p.productId)} />
-        ))}
-      </div>
+      {tab === "radar" && <RadarView opps={opps} />}
+      {tab === "ranking" && <Ranking products={products} onOpen={(id) => { setTab("produtos"); setOpen(id); }} />}
+      {tab === "produtos" && (
+        <>
+          <div className="mb-3 flex justify-end">
+            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}
+              className="rounded-lg bg-slate-800/80 px-2 py-1.5 text-sm text-slate-200 ring-1 ring-white/10">
+              <option value="liquidez">Mais líquidos</option>
+              <option value="lucro">Maior lucro</option>
+              <option value="nome">Nome</option>
+            </select>
+          </div>
+          <div className="grid gap-3">
+            {products.map((p) => (
+              <ProductCard key={p.productId} p={p} open={open === p.productId} onToggle={() => setOpen(open === p.productId ? null : p.productId)} />
+            ))}
+          </div>
+        </>
+      )}
 
       <footer className="mt-10 space-y-1 text-xs text-slate-500">
-        <p>Preço máx. de compra = revenda rápida − comissão Ricardo (10–12 %, teto CHF 290) − custos, com margem mínima de 20 % e lucro mínimo de CHF 40 (ajustável em config/products.ts).</p>
-        <p>Revenda rápida = meio caminho entre o 1.º quartil e a mediana dos preços de venda. Outliers removidos por IQR.</p>
+        <p>Comprar até = revenda rápida − comissão Ricardo (10–12 %, teto CHF 290) − custos, com margem mínima de 20 % e lucro mínimo de CHF 40. Portes contam no custo, exceto retirada perto de casa.</p>
+        <p>Confiança baixa = ainda sem vendas confirmadas (baseado em preços pedidos). Confirme sempre o anúncio antes de comprar.</p>
       </footer>
     </main>
+  );
+}
+
+// ─────────────────────────────── Radar ───────────────────────────────
+
+const KIND = {
+  buynow: { label: "Comprar já", icon: Zap, cls: "text-emerald-300 bg-emerald-500/10 ring-emerald-400/30" },
+  auction: { label: "Leilão a terminar", icon: Timer, cls: "text-sky-300 bg-sky-500/10 ring-sky-400/30" },
+  offer: { label: "Aceita proposta", icon: Handshake, cls: "text-amber-300 bg-amber-500/10 ring-amber-400/30" },
+} as const;
+
+function countdown(endDate: string | null, now: number): string {
+  if (!endDate) return "";
+  const m = Math.round((new Date(endDate).getTime() - now) / 60000);
+  if (m <= 0) return "a terminar";
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return h < 48 ? `${h} h ${m % 60} min` : `${Math.floor(h / 24)} dias`;
+}
+
+function offerMessage(o: Opp): string {
+  return `Grüezi! Ich interessiere mich für Ihr Angebot "${o.title}". Wäre CHF ${o.offerPrice} für Sie in Ordnung? ` +
+    `Ich kann sofort bezahlen${o.pickup ? " und den Artikel auch persönlich abholen" : ""}. Freundliche Grüsse`;
+}
+
+function RadarView({ opps }: { opps: Opp[] }) {
+  const [kind, setKind] = useState<RadarKind>("todos");
+  const [nearOnly, setNearOnly] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const [copied, setCopied] = useState<string | null>(null);
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30e3); return () => clearInterval(t); }, []);
+
+  const list = opps.filter((o) => (kind === "todos" || o.kind === kind) && (!nearOnly || o.nearby));
+  const count = (k: RadarKind) => (k === "todos" ? opps.length : opps.filter((o) => o.kind === k).length);
+
+  return (
+    <section>
+      <div className="no-scrollbar mb-3 flex gap-2 overflow-x-auto">
+        {(["todos", "buynow", "auction", "offer"] as const).map((k) => (
+          <button key={k} onClick={() => setKind(k)}
+            className={`shrink-0 rounded-full px-3 py-1 text-xs ring-1 ${kind === k ? "bg-white/10 text-white ring-white/30" : "text-slate-400 ring-white/10"}`}>
+            {k === "todos" ? "Tudo" : KIND[k].label} ({count(k)})
+          </button>
+        ))}
+        <button onClick={() => setNearOnly(!nearOnly)}
+          className={`shrink-0 rounded-full px-3 py-1 text-xs ring-1 ${nearOnly ? "bg-white/10 text-white ring-white/30" : "text-slate-400 ring-white/10"}`}>
+          <MapPin className="mr-0.5 inline h-3 w-3" /> Retirada perto
+        </button>
+      </div>
+
+      {list.length === 0 && (
+        <div className="rounded-xl bg-slate-900/70 p-5 text-sm text-slate-400 ring-1 ring-white/10">
+          Nenhuma oportunidade agora. O radar atualiza a cada recolha do robô — com alertas ligados, recebes aviso no telemóvel.
+        </div>
+      )}
+
+      <ul className="grid gap-2">
+        {list.map((o) => {
+          const k = KIND[o.kind];
+          const Icon = k.icon;
+          return (
+            <li key={o.kind + o.productId + o.id} className="rounded-2xl bg-slate-900/70 p-3 ring-1 ring-white/10">
+              <div className="flex gap-3">
+                {o.image
+                  ? <img src={o.image} alt="" className="h-20 w-20 shrink-0 rounded-xl bg-slate-800 object-cover" loading="lazy" />
+                  : <div className="h-20 w-20 shrink-0 rounded-xl bg-slate-800" />}
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className={`rounded-full px-2 py-0.5 ring-1 ${k.cls}`}><Icon className="mr-0.5 inline h-3 w-3" />{k.label}</span>
+                    {o.kind === "auction" && <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-sky-200 ring-1 ring-sky-400/20">⏱ {countdown(o.endDate, now)} · {o.bids} lances</span>}
+                    {o.nearby && <span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-violet-200 ring-1 ring-violet-400/20"><MapPin className="inline h-3 w-3" /> {o.city}</span>}
+                    <span className={`${CONF[o.confidence as keyof typeof CONF] ?? "text-slate-400"}`}>conf. {o.confidence}</span>
+                    <span className="text-slate-500">score {o.score}</span>
+                  </div>
+                  <a href={o.url} target="_blank" rel="noreferrer" className="line-clamp-2 text-sm text-slate-100 hover:text-white">
+                    <span className="text-slate-400">{o.product} · </span>{o.title}
+                  </a>
+                  <div className="tabular mt-1 flex flex-wrap items-baseline gap-x-3 text-sm">
+                    <span className="font-semibold text-white">
+                      {o.kind === "offer" ? <>propor {chf(o.offerPrice)} <span className="font-normal text-slate-400">(pedem {chf(o.price)})</span></>
+                        : o.kind === "auction" ? <>lance {chf(o.price)}</> : chf(o.price)}
+                    </span>
+                    {!o.nearby && o.shipping ? <span className="text-xs text-slate-400">+ portes {chf(o.shipping)}</span> : null}
+                    <span className="text-emerald-300">lucro ≈ {chf(o.estProfit)} ({o.roiPct}%)</span>
+                    {o.resale && <span className="text-xs text-slate-500">revenda ~{chf(o.resale)}</span>}
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <a href={o.url} target="_blank" rel="noreferrer"
+                      className="rounded-lg bg-emerald-500/15 px-3 py-1 text-xs font-medium text-emerald-200 ring-1 ring-emerald-400/30">
+                      Abrir no Ricardo <ExternalLink className="inline h-3 w-3" />
+                    </a>
+                    {o.kind === "offer" && (
+                      <button
+                        onClick={() => { navigator.clipboard?.writeText(offerMessage(o)); setCopied(o.id); setTimeout(() => setCopied(null), 2000); }}
+                        className="rounded-lg bg-amber-500/10 px-3 py-1 text-xs text-amber-200 ring-1 ring-amber-400/30">
+                        {copied === o.id ? <><Check className="inline h-3 w-3" /> Copiada</> : <><Copy className="inline h-3 w-3" /> Mensagem (DE)</>}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+// ─────────────────────────────── Ranking ───────────────────────────────
+
+function Ranking({ products, onOpen }: { products: ProductStats[]; onOpen: (id: string) => void }) {
+  const rows = [...products].filter((p) => p.tracking.lastRun)
+    .sort((a, b) => (b.liquidity.score ?? -1) - (a.liquidity.score ?? -1));
+  return (
+    <section className="overflow-x-auto rounded-2xl bg-slate-900/70 ring-1 ring-white/10">
+      <table className="tabular w-full text-left text-sm">
+        <thead className="text-[11px] uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-3 py-2 font-normal">#</th><th className="font-normal">Produto</th><th className="font-normal">Giro</th>
+            <th className="hidden font-normal sm:table-cell">Vendas/30d</th><th className="hidden font-normal sm:table-cell">Dias estoque</th>
+            <th className="font-normal">Até</th><th className="pr-3 font-normal">Lucro</th>
+          </tr>
+        </thead>
+        <tbody className="text-slate-200">
+          {rows.map((p, i) => (
+            <tr key={p.productId} className="cursor-pointer border-t border-white/5 hover:bg-white/5" onClick={() => onOpen(p.productId)}>
+              <td className="px-3 py-2 text-slate-500">{i + 1}</td>
+              <td className="max-w-[130px] truncate sm:max-w-[220px]">{p.name}</td>
+              <td>
+                <span className={`rounded-full px-2 py-0.5 text-xs ring-1 ${LIQ[p.liquidity.label].cls}`}>
+                  {p.liquidity.basis === "estimada" ? "~" : ""}{p.liquidity.score ?? "—"}
+                </span>
+              </td>
+              <td className="hidden sm:table-cell">{p.liquidity.salesPer30d ?? "—"}</td>
+              <td className="hidden sm:table-cell">{p.liquidity.daysOfSupply ?? "—"}</td>
+              <td className="font-semibold text-white">{chf(p.pricing.recommended?.maxBuy)}</td>
+              <td className="pr-3 text-emerald-300">{chf(p.pricing.recommended?.profitAtMaxBuy)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-3 py-2 text-xs text-slate-500">
+        ~ = giro estimado pelos leilões ativos (ainda sem vendas confirmadas). Toque num produto para ver os detalhes.
+        Dias de estoque = anúncios ativos ÷ vendas por dia: abaixo de ~10 o mercado absorve rápido; acima de 30 há excesso de oferta.
+      </p>
+    </section>
   );
 }
 
@@ -264,6 +421,20 @@ function Details({ p }: { p: ProductStats }) {
             </p>
           )}
         </div>
+      </div>
+
+      <div className="rounded-xl bg-black/20 p-3 ring-1 ring-white/5">
+        <div className="mb-1 text-xs text-slate-400">Para revender</div>
+        <p className="text-slate-200">{p.sell.note}</p>
+        {p.liquidity.daysOfSupply !== null && (
+          <p className="mt-1 text-xs text-slate-400">Dias de estoque no mercado: <b className="text-slate-200">{p.liquidity.daysOfSupply}</b> ({p.counts.active} anúncios ativos)</p>
+        )}
+        {p.sell.bestEndSlots.length > 0 && (
+          <p className="mt-1 text-xs text-slate-400">
+            Leilões que acabam em <b className="text-emerald-300">{p.sell.bestEndSlots[0].slot}</b> fecham mais alto (mediana {chf(p.sell.bestEndSlots[0].median)}).
+            {p.sell.bestEndSlots.length > 1 && <> Pior: {p.sell.bestEndSlots[p.sell.bestEndSlots.length - 1].slot} ({chf(p.sell.bestEndSlots[p.sell.bestEndSlots.length - 1].median)}) — bom para comprar.</>}
+          </p>
+        )}
       </div>
 
       {p.weekly.length > 1 && (

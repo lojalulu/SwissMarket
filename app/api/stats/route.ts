@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { activeProducts, getProduct } from '@/config/products';
 import { computeProductStats } from '@/lib/stats';
 import { recordsFor, runsFor } from '@/lib/store';
+import { alertChannels } from '@/lib/alerts';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -17,7 +18,7 @@ export async function GET(req: Request) {
   const now = new Date();
   const stats = products.map((p) => computeProductStats(p!, recordsFor(p!.id), runsFor(p!.id), now, days));
   return NextResponse.json(
-    { success: true, generatedAt: now.toISOString(), windowDays: days, products: stats },
+    { success: true, generatedAt: now.toISOString(), windowDays: days, alerts: alertChannels(), products: stats },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }

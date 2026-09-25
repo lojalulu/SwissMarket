@@ -122,6 +122,35 @@ async function main() {
     assert.equal(rel('1330000003').relevant, false);
     assert.match(rel('1330000004').reason!, /defekt/);
   });
+  await test('produtos novos: iPhones Pro/Pro Max/15–17, Switch 2, AirPods Pro 3…', () => {
+    const g = (id: string) => getProduct(id)!;
+    const cases: [string,string,boolean][] = [
+     ['iphone-15-pro-max','Apple iPhone 15 Pro Max 256GB Titan',true],
+     ['iphone-15-pro-max','iPhone 15 Pro Max 512GB',false],
+     ['iphone-15-pro','iPhone 15 Pro Max',false],
+     ['iphone-15-pro','iPhone 15 Pro 128 GB schwarz',true],
+     ['iphone-15','iPhone 15 Plus',false],
+     ['iphone-15','iPhone 15 128GB blau',true],
+     ['iphone-17-pro','iPhone 17 Pro 256GB Cosmic Orange',true],
+     ['iphone-17-pro-max','iPhone 17 Pro Max',true],
+     ['iphone-13-pro','iPhone 13 Pro 128gb',true],
+     ['iphone-13-pro','iPhone 13 Pro Hülle',false],
+     ['switch-2','Nintendo Switch 2 Konsole + Mario Kart World',true],
+     ['switch-2','Nintendo Switch OLED',false],
+     ['switch-oled','Nintendo Switch OLED weiss',true],
+     ['airpods-pro-3','Apple AirPods Pro 3',true],
+     ['airpods-pro-2','Apple AirPods Pro 3',false],
+     ['airpods-pro-2','AirPods Pro 2. Generation USB-C',true],
+     ['sony-wh1000xm5','Sony WH-1000XM5 schwarz',true],
+     ['apple-watch-ultra-2','Apple Watch Ultra 2 49mm Titan',true],
+     ['apple-watch-ultra-2','Armband für Apple Watch Ultra 2',false],
+     ['ps5-pro','Sony PlayStation 5 Pro 2TB',true],
+     ['ps5','Sony PlayStation 5 Pro 2TB',false],
+     ['galaxy-s24-ultra','Samsung Galaxy S24 Ultra 256GB',true],
+     ['dyson-airwrap','Dyson Airwrap Complete Long',true],
+    ];
+    for (const [id, t, exp] of cases) assert.equal(checkRelevance(t, '', g(id)).relevant, exp, `${id}: ${t}`);
+  });
   await test('normalização e parse de CHF', () => {
     assert.equal(normalize('iPhone13 128GB – Grün'), 'iphone 13 128 gb grun');
     assert.equal(parseChf("1'250.00"), 1250);
@@ -202,6 +231,61 @@ async function main() {
     assert.ok(s.pricing.recommended!.maxBuy! > 200 && s.pricing.recommended!.maxBuy! < 300, `maxBuy=${s.pricing.recommended!.maxBuy}`);
     assert.ok(s.liquidity.salesPer30d! > 0);
     console.log(`    → média ${s.sold.mean} · mediana ${s.sold.median} · revenda rápida ${s.pricing.resaleQuick} · comprar até ${s.pricing.recommended!.maxBuy} · liquidez ${s.liquidity.label} (${s.liquidity.score})`);
+  });
+
+  console.log('\nradar e alertas');
+  await test('extras do Ricardo: portes, retirada, cidade, foto, propostas', () => {
+    const b = rb['1330575112'];
+    assert.equal(b.shippingCost, 9);
+    assert.equal(b.pickup, true);
+    assert.equal(b.city, 'Spiegel b. Bern');
+    assert.equal(b.zip, '3095');
+    assert.equal(b.canOffer, false);
+    assert.match(b.image!, /^https:\/\/img\.ricardostatic\.ch/);
+    assert.ok(real.items.filter((i) => i.canOffer).length >= 5);
+  });
+  await test('radar: comprar já, leilão a terminar e proposta (com portes e retirada perto)', () => {
+    const { computeProductStats: cps } = require('../lib/stats') as typeof import('../lib/stats');
+    const t0 = new Date('2026-09-27T12:00:00Z');
+    const mk = (id: string, o: Partial<import('../lib/types').ListingRecord>): import('../lib/types').ListingRecord => ({
+      id, productId: 'iphone-13', title: `iPhone 13 ${id}`, url: `https://www.ricardo.ch/de/a/x-${id}/`, mode: 'buynow',
+      bidPrice: null, buyNowPrice: null, bids: 0, endDate: '2026-10-05T10:00:00Z', condition: null, relevant: true,
+      firstSeen: '2026-09-20T10:00:00Z', lastSeen: t0.toISOString(), seenCount: 3, history: [], status: 'active',
+      finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null, ...o,
+    });
+    const soldRecs = [330, 345, 350, 355, 360, 362, 365, 370, 372, 380].map((p, i) => mk(`s${i}`, {
+      mode: 'auction', status: 'sold', finalPrice: p, soldVia: 'auction', soldEvidence: 'detail',
+      closedAt: `2026-09-2${i % 6}T19:00:00Z`, bids: 8,
+    }));
+    const recs = [
+      ...soldRecs,
+      mk('cheap-near', { buyNowPrice: 220, shippingCost: 9, pickup: true, zip: '3011', city: 'Bern' }),
+      mk('cheap-far', { buyNowPrice: 250, shippingCost: 9, pickup: false, zip: '1200', city: 'Genève' }),
+      mk('offer', { buyNowPrice: 300, canOffer: true, shippingCost: 0 }),
+      mk('pricey', { buyNowPrice: 420 }),
+      mk('auction', { mode: 'auction', bidPrice: 150, bids: 12, endDate: '2026-09-27T14:30:00Z' }),
+      mk('auction-far', { mode: 'auction', bidPrice: 150, bids: 12, endDate: '2026-09-30T14:30:00Z' }),
+    ];
+    const runs = [{ at: '2026-09-20T10:00:00Z', found: 60, relevant: 40, complete: true }, { at: t0.toISOString(), found: 60, relevant: 40, complete: true }];
+    const st = cps(iphone, recs, runs, t0, 30);
+    const byId = Object.fromEntries(st.opportunities.map((o) => [o.id, o]));
+    const max = st.pricing.recommended!.maxBuy!;
+    assert.equal(byId['cheap-near'].kind, 'buynow');
+    assert.equal(byId['cheap-near'].nearby, true);
+    assert.equal(byId['cheap-near'].cost, 220);          // retirada perto → sem portes
+    if (byId['cheap-far']) assert.equal(byId['cheap-far'].cost, 259); // portes somados
+    assert.equal(byId['offer'].kind, 'offer');
+    assert.equal(byId['offer'].offerPrice, max);
+    assert.equal(byId['pricey'], undefined);
+    assert.equal(byId['auction'].kind, 'auction');
+    assert.ok(byId['auction'].minutesLeft! > 0 && byId['auction'].minutesLeft! <= 150);
+    assert.equal(byId['auction-far'], undefined);         // termina daqui a 3 dias → não é urgente
+    assert.ok(st.sell.buyNowPrice! > 350);
+    assert.ok(st.liquidity.daysOfSupply !== null);
+    const { formatAlert } = require('../lib/alerts') as typeof import('../lib/alerts');
+    const msg = formatAlert(byId['auction'], st);
+    assert.match(msg.title, /leilão acaba em/);
+    assert.match(formatAlert(byId['offer'], st).title, /ofereça CHF/);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

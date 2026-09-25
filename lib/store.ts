@@ -13,6 +13,8 @@ interface DB {
   products: Record<string, { runs: ProductRun[] }>;
   /** chave = `${productId}:${listingId}` (o mesmo anúncio pode aparecer em pesquisas diferentes) */
   listings: Record<string, ListingRecord & { missedRuns?: number }>;
+  /** Alertas já enviados (anti-spam): chave → quando e a que preço. */
+  alerts?: Record<string, { at: string; price: number }>;
 }
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
@@ -52,6 +54,15 @@ export function getDb(): Readonly<DB> {
 }
 
 const key = (productId: string, id: string) => `${productId}:${id}`;
+
+/** Só copia os extras que vieram definidos (não apaga dados antigos com undefined). */
+function extras(item: ScrapedListing): Partial<ListingRecord> {
+  const out: Partial<ListingRecord> = {};
+  for (const k of ['image', 'shippingCost', 'pickup', 'zip', 'city', 'canOffer', 'sellerId'] as const) {
+    if (item[k] !== undefined) (out as any)[k] = item[k];
+  }
+  return out;
+}
 
 /** Preço dentro da faixa? (lance de leilão abaixo do piso é normal no início → aceita) */
 function priceReason(item: ScrapedListing, p: ProductConfig): string | undefined {
@@ -110,6 +121,7 @@ export function ingest(payload: IngestPayload): IngestResult {
         id: item.id, productId: p.id, title: item.title, url: item.url, mode: item.mode,
         bidPrice: item.bidPrice, buyNowPrice: item.buyNowPrice, bids: item.bids,
         endDate: item.endDate, startDate: item.startDate ?? null, condition: item.condition,
+        ...extras(item),
         relevant, rejectReason: reason,
         firstSeen: now, lastSeen: now, seenCount: 1, history: [snap],
         status: 'active', finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null,
@@ -132,6 +144,7 @@ export function ingest(payload: IngestPayload): IngestResult {
         endDate: item.endDate && (item.source.includes('next') || !prev.endDate) ? item.endDate : prev.endDate,
         condition: item.condition ?? prev.condition,
         startDate: item.startDate ?? prev.startDate ?? null,
+        ...extras(item),
         relevant, rejectReason: reason,
         lastSeen: now,
         seenCount: prev.seenCount + 1,
@@ -276,6 +289,24 @@ function prune(db: DB, now: Date) {
     if (!r.relevant && age > 7 * DAY) delete db.listings[k];
     else if (r.status !== 'active' && r.closedAt && nowMs - new Date(r.closedAt).getTime() > 180 * DAY) delete db.listings[k];
   }
+}
+
+/** Devolve true se este alerta ainda não foi enviado (ou se o preço caiu ≥ 5 % desde o último). */
+export function shouldAlert(alertKey: string, price: number, now = new Date()): boolean {
+  const db = load();
+  const prev = db.alerts?.[alertKey];
+  if (!prev) return true;
+  return price <= prev.price * 0.95 && now.getTime() - new Date(prev.at).getTime() > 3600e3;
+}
+
+export function markAlerted(entries: { key: string; price: number }[], now = new Date()) {
+  if (!entries.length) return;
+  const db = load();
+  db.alerts ??= {};
+  for (const e of entries) db.alerts[e.key] = { at: now.toISOString(), price: e.price };
+  // limpa alertas com mais de 30 dias
+  for (const [k, v] of Object.entries(db.alerts)) if (now.getTime() - new Date(v.at).getTime() > 30 * DAY) delete db.alerts[k];
+  save(db);
 }
 
 export function recordsFor(productId: string): ListingRecord[] {

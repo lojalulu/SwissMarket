@@ -248,7 +248,27 @@ function listingFromObject(o: Obj, source: string): Partial<ScrapedListing> & { 
     startDate: toIso(pick(o, K.start_)),
     condition: conditionText(pick(o, K.cond)),
     source,
+    ...extrasFromObject(o),
   };
+}
+
+/** Frete, retirada, localização, propostas, foto e vendedor (payload RSC do Ricardo). */
+function extrasFromObject(o: Obj): Partial<ScrapedListing> {
+  const out: Partial<ScrapedListing> = {};
+  const ship = o.shipping;
+  if (Array.isArray(ship) && ship.length) {
+    const opts = ship.filter((x): x is Obj => !!x && typeof x === 'object');
+    out.pickup = opts.some((x) => /get_by_buyer|pickup|abholung/i.test(String(x.key ?? '')));
+    const costs = opts.filter((x) => !/get_by_buyer|pickup|abholung/i.test(String(x.key ?? '')))
+      .map((x) => Number(x.cost)).filter((n) => Number.isFinite(n) && n >= 0);
+    out.shippingCost = costs.length ? Math.min(...costs) : null;
+    const loc = opts.find((x) => x.zipCode || x.city);
+    if (loc) { out.zip = loc.zipCode ? String(loc.zipCode) : null; out.city = loc.city ? String(loc.city) : null; }
+  }
+  if (typeof o.canMakeAnOffer === 'boolean') out.canOffer = o.canMakeAnOffer;
+  if (typeof o.image === 'string' && /^https?:/.test(o.image)) out.image = o.image;
+  if (typeof o.sellerId === 'string' || typeof o.sellerId === 'number') out.sellerId = String(o.sellerId);
+  return out;
 }
 
 function listingsFromJson(root: unknown, source: string): Map<string, Partial<ScrapedListing> & { id: string }> {
@@ -490,6 +510,9 @@ export function parseSearchPage(html: string, now = new Date()): SearchParseResu
           : 'buynow';
       if (merged.mode === 'buynow') { merged.bidPrice = null; merged.bids = 0; }
       if (json.startDate) merged.startDate = json.startDate;
+      for (const k of ['image', 'shippingCost', 'pickup', 'zip', 'city', 'canOffer', 'sellerId'] as const) {
+        if (json[k] !== undefined) (merged as any)[k] = json[k];
+      }
       base = merged;
     }
     if (!base.title || (base.bidPrice === null && base.buyNowPrice === null)) continue;

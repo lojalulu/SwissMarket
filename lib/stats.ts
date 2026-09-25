@@ -92,13 +92,29 @@ export interface Opportunity {
   id: string;
   title: string;
   url: string;
+  image: string | null;
   mode: ListingRecord['mode'];
+  /** buynow = comprar já · auction = leilão a terminar · offer = aceita proposta de preço */
+  kind: 'buynow' | 'auction' | 'offer';
+  /** Preço atual (Sofort ou lance). */
   price: number;
-  kind: 'buynow' | 'auction';
+  shipping: number | null;
+  pickup: boolean;
+  city: string | null;
+  /** Retirada perto de ti (HOME_ZIPS). */
+  nearby: boolean;
+  /** Preço + portes (0 se retirada perto). */
+  cost: number;
   bids: number;
   endDate: string | null;
+  minutesLeft: number | null;
   discountPct: number;
   estProfit: number;
+  roiPct: number;
+  /** Para "offer": valor a propor ao vendedor. */
+  offerPrice: number | null;
+  /** 0–100: lucro, liquidez, confiança e urgência. */
+  score: number;
 }
 
 export interface ProductStats {
@@ -118,7 +134,11 @@ export interface ProductStats {
     salesPer30d: number | null;
     sellThroughPct: number | null;
     medianDaysToSell: number | null;
+    /** Anúncios ativos ÷ vendas por dia: quantos dias de "estoque" o mercado tem. */
+    daysOfSupply: number | null;
   };
+  /** Sugestões para quem vai REVENDER. */
+  sell: { buyNowPrice: number | null; note: string; bestEndSlots: { slot: string; median: number; n: number }[] };
   pricing: {
     basis: 'vendidos' | 'misto' | 'pedidos' | 'sem_dados';
     confidence: Confidence;
@@ -145,6 +165,38 @@ function isoWeek(d: Date): string {
   const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
   const wk = Math.ceil(((t.getTime() - y0.getTime()) / DAY + 1) / 7);
   return `${t.getUTCFullYear()}-W${String(wk).padStart(2, '0')}`;
+}
+
+/** Prefixos de código postal considerados "perto" (retirada sem portes). Ex.: HOME_ZIPS=30,31,32,36,38 */
+function homeZipPrefixes(): string[] {
+  const raw = (typeof process !== 'undefined' && process.env?.HOME_ZIPS) || '30,31,32,33,34,36,37,38';
+  return raw.split(',').map((z) => z.trim()).filter(Boolean);
+}
+
+/** Mediana do preço final por faixa de dia/hora de fim do leilão (hora de Zurique). */
+function endSlots(sold: ListingRecord[]): { slot: string; median: number; n: number }[] {
+  if (sold.length < 12) return [];
+  const slotOf = (iso: string) => {
+    const d = new Date(iso);
+    let wd = d.getUTCDay(), h = d.getUTCHours();
+    try {
+      const f = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Zurich', weekday: 'short', hour: '2-digit', hourCycle: 'h23' }).formatToParts(d);
+      h = Number(f.find((x) => x.type === 'hour')?.value ?? h);
+      wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(f.find((x) => x.type === 'weekday')?.value ?? '');
+    } catch { /* sem Intl */ }
+    const day = wd === 0 || wd === 6 ? 'fim de semana' : 'dia útil';
+    const part = h < 6 ? 'madrugada' : h < 12 ? 'manhã' : h < 18 ? 'tarde' : 'noite';
+    return `${day} · ${part}`;
+  };
+  const groups = new Map<string, number[]>();
+  for (const r of sold) {
+    if (!r.closedAt || r.finalPrice === null) continue;
+    const k = slotOf(r.closedAt);
+    groups.set(k, [...(groups.get(k) ?? []), r.finalPrice]);
+  }
+  return [...groups.entries()].filter(([, v]) => v.length >= 3)
+    .map(([slot, v]) => ({ slot, median: dist(v).median!, n: v.length }))
+    .sort((a, b) => b.median - a.median);
 }
 
 export function computeProductStats(
@@ -202,12 +254,14 @@ export function computeProductStats(
       (sellThrough ?? 50) * 0.3 +
       (medDays === null ? 8 : medDays <= 3 ? 20 : medDays <= 7 ? 12 : medDays <= 14 ? 6 : 0),
     );
-    liquidity = { label: score >= 65 ? 'rapido' : score >= 40 ? 'medio' : 'lento', score, basis: 'vendas', salesPer30d, sellThroughPct: sellThrough, medianDaysToSell: medDays };
-  } else if (auctionsWithBidsPct !== null && avgBids !== null) {
-    const score = Math.round(auctionsWithBidsPct * 0.5 + Math.min(avgBids, 10) * 5);
-    liquidity = { label: score >= 65 ? 'rapido' : score >= 40 ? 'medio' : 'lento', score, basis: 'estimada', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null };
+    liquidity = { label: score >= 65 ? 'rapido' : score >= 40 ? 'medio' : 'lento', score, basis: 'vendas', salesPer30d, sellThroughPct: sellThrough, medianDaysToSell: medDays, daysOfSupply: salesPer30d > 0 ? r2(fresh.length / (salesPer30d / 30)) : null };
+  } else if (auctionsWithBidsPct !== null && avgBids !== null && auctions.length >= 5) {
+    // Estimativa pelos leilões ativos, "encolhida" para 50 quando há poucos leilões (evita 90 com 3 anúncios).
+    const raw = auctionsWithBidsPct * 0.5 + Math.min(avgBids, 10) * 5;
+    const score = Math.round(50 + (raw - 50) * Math.min(1, auctions.length / 15));
+    liquidity = { label: score >= 65 ? 'rapido' : score >= 40 ? 'medio' : 'lento', score, basis: 'estimada', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null, daysOfSupply: null };
   } else {
-    liquidity = { label: 'sem_dados', score: null, basis: 'sem_dados', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null };
+    liquidity = { label: 'sem_dados', score: null, basis: 'sem_dados', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null, daysOfSupply: null };
   }
 
   // ── preço de revenda de referência
@@ -240,30 +294,56 @@ export function computeProductStats(
   const recommended = quick ? maxBuyFor(quick, p) : null;
   const ceiling = median ? maxBuyFor(median, p) : null;
 
-  // ── oportunidades ativas agora (abaixo do preço máximo recomendado)
+  // ── oportunidades ativas agora
   const opportunities: Opportunity[] = [];
   if (recommended?.maxBuy && median) {
     const limit = recommended.maxBuy;
+    const homeZips = homeZipPrefixes();
+    const confBonus = confidence === 'alta' ? 12 : confidence === 'media' ? 6 : 0;
+    const make = (r: ListingRecord, kind: Opportunity['kind'], price: number, offerPrice: number | null): Opportunity => {
+      const nearby = !!r.pickup && !!r.zip && homeZips.some((z) => r.zip!.startsWith(z));
+      const cost = r2(price + (nearby ? 0 : r.shippingCost ?? 0));
+      const buyAt = offerPrice ?? cost;
+      const profit = r2(recommended.net - buyAt);
+      const roi = Math.round((profit / Math.max(buyAt, 1)) * 100);
+      const minutesLeft = r.endDate ? Math.round((new Date(r.endDate).getTime() - nowMs) / 60e3) : null;
+      const urgency = kind === 'auction' && minutesLeft !== null ? Math.max(0, 15 - minutesLeft / 24) : 0;
+      const score = Math.round(Math.max(0, Math.min(100,
+        Math.min(roi, 80) * 0.6 + (liquidity.score ?? 30) * 0.3 + confBonus + urgency + (nearby ? 4 : 0))));
+      return {
+        id: r.id, title: r.title, url: r.url, image: r.image ?? null, mode: r.mode, kind, price,
+        shipping: r.shippingCost ?? null, pickup: !!r.pickup, city: r.city ?? null, nearby, cost, bids: r.bids,
+        endDate: r.endDate, minutesLeft, discountPct: Math.round((1 - buyAt / median) * 100),
+        estProfit: profit, roiPct: roi, offerPrice, score,
+      };
+    };
     for (const r of fresh) {
-      if (r.buyNowPrice && r.buyNowPrice <= limit && r.buyNowPrice >= p.priceFloor * 0.6) {
-        opportunities.push({
-          id: r.id, title: r.title, url: r.url, mode: r.mode, price: r.buyNowPrice, kind: 'buynow', bids: r.bids,
-          endDate: r.endDate, discountPct: Math.round((1 - r.buyNowPrice / median) * 100),
-          estProfit: r2(recommended.net - r.buyNowPrice),
-        });
+      const endMs = r.endDate ? new Date(r.endDate).getTime() : null;
+      if (endMs !== null && endMs <= nowMs) continue;
+      if (r.buyNowPrice && r.buyNowPrice >= p.priceFloor * 0.6) {
+        const o = make(r, 'buynow', r.buyNowPrice, null);
+        if (o.cost <= limit) { opportunities.push(o); continue; }
+        // Vendedor aceita propostas e o preço está até 25 % acima do teto → propor o teto.
+        if (r.canOffer && o.cost <= limit * 1.25) { opportunities.push(make(r, 'offer', r.buyNowPrice, limit)); continue; }
       }
-      const endsSoon = r.endDate && new Date(r.endDate).getTime() - nowMs < 12 * 3600e3 && new Date(r.endDate).getTime() > nowMs;
-      const alreadyBuyNow = opportunities.some((o) => o.id === r.id);
-      if (r.mode !== 'buynow' && endsSoon && !alreadyBuyNow && r.bidPrice && r.bidPrice <= limit * 0.85) {
-        opportunities.push({
-          id: r.id, title: r.title, url: r.url, mode: r.mode, price: r.bidPrice, kind: 'auction', bids: r.bids,
-          endDate: r.endDate, discountPct: Math.round((1 - r.bidPrice / median) * 100),
-          estProfit: r2(recommended.net - r.bidPrice),
-        });
+      // Leilão a terminar nas próximas 6 h com lance ainda bem abaixo do teto (margem para subir).
+      if (r.mode !== 'buynow' && r.bidPrice && endMs !== null && endMs - nowMs < 6 * 3600e3) {
+        const o = make(r, 'auction', r.bidPrice, null);
+        if (o.cost <= limit * 0.85) opportunities.push(o);
       }
     }
-    opportunities.sort((a, b) => b.estProfit - a.estProfit);
+    opportunities.sort((a, b) => b.score - a.score || b.estProfit - a.estProfit);
   }
+
+  // ── sugestões para revender
+  const soldPrices = sold.map((r) => r.finalPrice!).sort((a, b) => a - b);
+  const sellBuyNow = soldPrices.length >= 5 ? Math.round(quantile(soldPrices, 0.65))
+    : asking.length >= 3 ? Math.round(dist(asking).median!) : null;
+  const sellNote = !sellBuyNow ? 'Sem dados suficientes para sugerir preço de venda.'
+    : liquidity.label === 'rapido'
+      ? `Sofort kaufen a ~CHF ${sellBuyNow}, ou leilão a partir de CHF 1 (10 % de desconto na comissão) — há procura suficiente.`
+      : `Sofort kaufen a ~CHF ${sellBuyNow} com "aceita propostas"; evite leilão a CHF 1 (pouca procura).`;
+  const bestEndSlots = endSlots(sold.filter((r) => r.soldVia === 'auction'));
 
   // ── série semanal (8 semanas) de preços vendidos
   const byWeek = new Map<string, number[]>();
@@ -304,8 +384,9 @@ export function computeProductStats(
     active: { askingBuyNow: dist(asking), auctionBids: dist(hotBids), auctionsWithBidsPct, avgBids, auctions: auctions.length },
     sold: soldDist,
     liquidity,
+    sell: { buyNowPrice: sellBuyNow, note: sellNote, bestEndSlots },
     pricing: { basis, confidence, resaleMedian: median, resaleQuick: quick === null ? null : r2(quick), recommended, ceiling },
-    opportunities: opportunities.slice(0, 15),
+    opportunities: opportunities.slice(0, 20),
     weekly,
     verdict,
   };

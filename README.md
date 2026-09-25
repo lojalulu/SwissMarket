@@ -34,6 +34,19 @@ Três fontes de dados na mesma página, fundidas por ID do anúncio: `__NEXT_DAT
 
 Respeita o `robots.txt` do Ricardo: só abre `/de/s/<termo>/` (sem `?`) e páginas de anúncio `/de/a/…`, com pausas de ~7 s.
 
+## Radar, alertas e ranking (v3)
+
+- **Radar**: oportunidades em tempo real, ordenadas por *score* (lucro, liquidez, confiança e urgência)
+  - 💰 **Comprar já**: Sofort kaufen + portes ≤ preço máximo de compra
+  - ⏰ **Leilão a terminar**: acaba nas próximas 6 h com lance ≤ 85 % do teto (margem para subir)
+  - 🤝 **Aceita proposta**: vendedor aceita "Preisvorschlag" e pede até 25 % acima do teto → botão copia a mensagem em alemão
+  - 📍 **Retirada perto** (`HOME_ZIPS`): sem portes e podes verificar o artigo antes de pagar
+- **Alertas** no telemóvel via ntfy ou Telegram, sem repetição (novo aviso só se o preço cair ≥ 5 %)
+- **Ranking**: produtos por liquidez, vendas/30 dias e **dias de estoque** (anúncios ativos ÷ vendas por dia)
+- **Para revender**: preço Sofort sugerido e as faixas de dia/hora em que os leilões fecham mais alto
+
+Teste dos alertas: `http://IP:3000/api/alerts/test?token=SEU_TOKEN`
+
 ## Instalação
 
 ### 1. VPS

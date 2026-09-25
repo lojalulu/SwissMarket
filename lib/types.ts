@@ -20,6 +20,17 @@ export interface ScrapedListing {
   condition: string | null;
   /** De onde veio o dado: next-data | json-ld | html */
   source: string;
+  /** Extras do payload do Ricardo (opcionais). */
+  image?: string | null;
+  /** Portes mais baratos com envio (CHF); null = só retirada ou desconhecido. */
+  shippingCost?: number | null;
+  /** Aceita retirada pelo comprador. */
+  pickup?: boolean;
+  zip?: string | null;
+  city?: string | null;
+  /** O vendedor aceita propostas de preço ("Preisvorschlag"). */
+  canOffer?: boolean;
+  sellerId?: string | null;
 }
 
 /** Sinais lidos na página de um anúncio (a decisão final é feita em lib/store.ts). */
@@ -68,6 +79,13 @@ export interface ListingRecord {
   firstSeen: string;
   /** Data de publicação no Ricardo (mais precisa que firstSeen para "dias até vender"). */
   startDate?: string | null;
+  image?: string | null;
+  shippingCost?: number | null;
+  pickup?: boolean;
+  zip?: string | null;
+  city?: string | null;
+  canOffer?: boolean;
+  sellerId?: string | null;
   lastSeen: string;
   seenCount: number;
   /** Últimos preços observados (máx. 20) — para ver a evolução dos lances. */
