@@ -24,7 +24,7 @@ import { isChallengePage, parseDetailPage, parseSearchPage, searchUrl } from '..
 import { checkRelevance } from '../lib/text';
 import type { DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '3.0.0';
+const VERSION = '3.0.1';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────
@@ -354,10 +354,16 @@ async function recheckPhase(session: BrowserSession) {
   };
 
   for (const item of queue) {
-    if (consecutiveBlocks >= 3) { warn('Demasiados bloqueios seguidos — verificação interrompida neste ciclo.'); break; }
+    if (consecutiveBlocks >= 2) { warn('Cloudflare a bloquear as páginas de anúncio — verificação adiada para o próximo ciclo.'); break; }
     try {
       const res = await load(session, item.url, false);
-      if (res.challenge) { consecutiveBlocks++; await session.close(); await sleep(jitter(30_000)); continue; }
+      if (res.challenge) {
+        consecutiveBlocks++;
+        log(`   · ${item.id} → bloqueado pela Cloudflare`);
+        await session.close();
+        await sleep(jitter(20_000));
+        continue;
+      }
       consecutiveBlocks = 0;
       const sig: DetailSignals = res.status === 404 || res.status === 410
         ? { id: item.id, removed: true, ended: true, soldMarker: false, bids: null, currentPrice: null, buyNowPrice: null, condition: null, endDate: null }
@@ -424,6 +430,14 @@ async function cycle() {
   const summary: Summary[] = [];
   const started = Date.now();
   try {
+    // Verificação de vendas PRIMEIRO: no início do ciclo o IP está "frio" e a Cloudflare deixa passar.
+    // (No fim de 30+ páginas seguidas, as páginas de anúncio passaram a pedir desafio.)
+    if (CFG.recheck && !CFG.dryRun) {
+      await recheckPhase(session);
+      consecutiveBlocks = 0;
+      await session.close();
+      await sleep(jitter(CFG.delayMs));
+    }
     for (const [i, p] of products.entries()) {
       if (consecutiveBlocks >= 3) {
         warn('3 bloqueios seguidos — pausa de 10 min antes de continuar.');
@@ -434,7 +448,6 @@ async function cycle() {
       summary.push(await scrapeProduct(session, p));
       if (i < products.length - 1) await sleep(jitter(CFG.delayMs));
     }
-    if (CFG.recheck && !CFG.dryRun) await recheckPhase(session);
   } finally {
     await session.close();
   }
