@@ -9,3 +9,4 @@ data/db.json
 data/db.json.*
 data/debug/
 data/outbox/
+data/chrome-profile/

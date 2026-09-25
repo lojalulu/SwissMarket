@@ -58,6 +58,9 @@ const CFG = {
   recheck: !flag('no-recheck'),
   inspect: opt('inspect'),
   debugDir: path.join(ROOT, 'data', 'debug'),
+  // Perfil persistente: guarda o cookie da Cloudflare (cf_clearance) entre reinícios do Chromium,
+  // para o desafio ser resolvido uma vez e não a cada produto.
+  profileDir: process.env.CHROME_PROFILE || path.join(ROOT, 'data', 'chrome-profile'),
   outboxDir: path.join(ROOT, 'data', 'outbox'),
 };
 
@@ -104,9 +107,14 @@ class BrowserSession {
     }
     await this.close();
     const exe = chromiumPath();
+    fs.mkdirSync(CFG.profileDir, { recursive: true });
+    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      try { fs.rmSync(path.join(CFG.profileDir, lock), { force: true }); } catch { /* lock antigo de um crash */ }
+    }
     this.browser = await puppeteer.launch({
       executablePath: exe,
       headless: true,
+      userDataDir: CFG.profileDir,
       protocolTimeout: 120_000,
       args: [
         '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
@@ -161,11 +169,19 @@ async function load(session: BrowserSession, url: string, waitForCards: boolean)
   // Desafio Cloudflare: o Chromium real costuma resolvê-lo sozinho em alguns segundos.
   let html = await page.content();
   if (isChallengePage(html)) {
-    log('   🛡️  Desafio Cloudflare — a aguardar até 25 s…');
-    await page.waitForFunction(() => !/Just a moment|Einen Moment|Attention Required/i.test(document.title), { timeout: 25_000 }).catch(() => {});
+    log('   🛡️  Desafio Cloudflare — a aguardar (até 45 s)…');
+    const solved = () => page.waitForFunction(
+      () => !/Just a moment|Einen Moment|Attention Required/i.test(document.title), { timeout: 45_000 },
+    ).then(() => true, () => false);
+    let ok = await solved();
+    if (!ok) {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: CFG.navTimeout }).catch(() => {});
+      ok = await solved();
+    }
     await sleep(2000);
     html = await page.content();
     if (isChallengePage(html)) return { html, status, finalUrl: page.url(), challenge: true };
+    log('   ✅ Desafio resolvido.');
   }
 
   await session.acceptCookies(page);
@@ -248,7 +264,7 @@ async function scrapeTerm(session: BrowserSession, term: string): Promise<{ item
       if (res.challenge) {
         consecutiveBlocks++;
         warn(`Bloqueado pela Cloudflare (tentativa ${attempt}).`);
-        await session.close();
+        if (attempt >= 2) await session.close(); // 1ª vez mantém o browser (e os cookies)
         await sleep(jitter(30_000 * attempt));
         continue;
       }
