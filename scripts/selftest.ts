@@ -72,6 +72,43 @@ async function main() {
     assert.equal(parseSearchPage(fx('challenge.html')).challenge, true);
   });
 
+  console.log('\npágina REAL do Ricardo (25/09/2026)');
+  const real = parseSearchPage(fx('real-search-iphone13.html'), new Date('2026-09-25T18:12:35Z'));
+  const rb = Object.fromEntries(real.items.map((i) => [i.id, i]));
+  await test('lê os 60 anúncios e o payload RSC do App Router', () => {
+    assert.equal(real.items.length, 60);
+    assert.equal(real.sources.nextData, 60);
+  });
+  await test('título vem do produto, não da etiqueta "Beliebt"/"Boost"', () => {
+    assert.equal(rb['1330050792'].title, 'iPhone 13, blau 128 Gb');
+    assert.ok(!real.items.some((i) => /^(Beliebt|Boost|Neuheit)$/.test(i.title)));
+  });
+  await test('leilão com 296 lances, data de fim exata e condição', () => {
+    const a = rb['1330050792'];
+    assert.equal(a.mode, 'auction');
+    assert.equal(a.bids, 296);
+    assert.equal(a.bidPrice, 203);
+    assert.equal(a.endDate, '2026-09-26T11:37:00.000Z');
+    assert.equal(a.condition, 'acceptable');
+    assert.equal(a.startDate, '2026-09-19T11:39:00.000Z');
+  });
+  await test('Sofort kaufen puro fica como buynow (sem lance)', () => {
+    const b = rb['1330575112'];
+    assert.equal(b.mode, 'buynow');
+    assert.equal(b.buyNowPrice, 219);
+    assert.equal(b.bidPrice, null);
+  });
+  await test('data do card "Di, 29 Sep., 16:00" (hora de Zurique) → UTC', () => {
+    assert.equal(parseTimeLeft('Di, 29 Sep., 16:00', now), '2026-09-29T14:00:00.000Z');
+    assert.equal(parseTimeLeft('Fr, 2 Okt., 07:42', now), '2026-10-02T05:42:00.000Z');
+    assert.equal(parseTimeLeft('Mo, 7 Dez., 10:00', now), '2026-12-07T09:00:00.000Z');
+  });
+  await test('Pro, mini e defeituosos da página real são rejeitados', () => {
+    const rejected = real.items.filter((i) => !checkRelevance(i.title, i.url, iphone).relevant);
+    assert.equal(rejected.length, 11);
+    assert.ok(rejected.every((i) => /pro|mini|defekt|bastler|kaputt/i.test(i.title)));
+  });
+
   console.log('\nrelevância');
   const rel = (id: string) => checkRelevance(byId[id].title, byId[id].url, iphone);
   await test('aceita iPhone 13 128GB real', () => {
