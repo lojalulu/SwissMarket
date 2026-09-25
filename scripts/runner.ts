@@ -7,7 +7,8 @@
 //   npx tsx scripts/runner.ts --inspect "iphone 13 128gb"   # diagnóstico: grava o HTML e mostra o que foi lido
 //   npx tsx scripts/runner.ts --inspect https://www.ricardo.ch/de/a/...   # diagnóstico de um anúncio
 //   npx tsx scripts/runner.ts --dry-run           # não envia nada para a VPS
-//   npx tsx scripts/runner.ts --no-recheck        # só pesquisa, sem abrir anúncios terminados
+//   npx tsx scripts/runner.ts --recheck           # tenta abrir anúncios terminados (a Cloudflare costuma bloquear)
+//   npx tsx scripts/runner.ts --no-closing        # não espreita leilões antes do fim entre ciclos
 //
 // Configuração: ficheiro .env na raiz (ver .env.example) ou variáveis de ambiente.
 //
@@ -24,7 +25,7 @@ import { isChallengePage, parseDetailPage, parseRscText, parseSearchPage, search
 import { checkRelevance } from '../lib/text';
 import type { DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────
@@ -57,7 +58,10 @@ const CFG = {
   loopMinutes: Number(opt('loop') ?? process.env.LOOP_MINUTES ?? 0),
   only: (opt('only') ?? process.env.PRODUCTS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   dryRun: flag('dry-run'),
-  recheck: !flag('no-recheck'),
+  // Páginas de anúncio estão sempre atrás da Cloudflare → verificação direta desligada por omissão (--recheck liga).
+  recheck: flag('recheck'),
+  // Espreitar leilões ~10 min antes do fim, entre ciclos (--no-closing desliga).
+  closing: !flag('no-closing'),
   inspect: opt('inspect'),
   debugDir: path.join(ROOT, 'data', 'debug'),
   // Perfil antigo (v2.0.1) — apagado ao arrancar: um perfil reutilizado era MAIS bloqueado.
@@ -150,9 +154,13 @@ class BrowserSession {
   }
 
   async close() {
-    try { await this.browser?.close(); } catch { /* já fechado */ }
+    const b = this.browser;
     this.browser = null;
     this.page = null;
+    if (!b) return;
+    // No Termux o browser.close() às vezes fica pendurado → máximo 8 s, depois mata o processo.
+    const closed = await Promise.race([b.close().then(() => true, () => false), sleep(8000).then(() => false)]);
+    if (!closed) { try { b.process()?.kill('SIGKILL'); } catch { /* já morreu */ } }
   }
 }
 
@@ -531,6 +539,49 @@ async function cycle() {
   console.log(`└─ ${Math.round((Date.now() - started) / 1000)} s · dashboard: ${CFG.apiUrl}\n`);
 }
 
+// ───────────────────────────── espreitar leilões antes do fim ─────────────────────────────
+//
+// Entre ciclos, para cada leilão com lances que acaba antes do próximo ciclo, o runner relê a pesquisa
+// desse produto ~10 min antes do fim. O lance visto nessa altura ≈ preço final (sem abrir o anúncio,
+// que a Cloudflare bloqueia). Leilões que terminam juntos (±20 min) partilham a mesma leitura.
+
+async function closingWatch(until: number, stopped: () => boolean) {
+  let items: { productId: string; id: string; endDate: string }[] = [];
+  try {
+    const within = Math.ceil((until - Date.now()) / 60e3) + 15;
+    items = (await api<{ items: typeof items }>('GET', `/api/closing?within=${within}`)).items;
+  } catch (e) {
+    warn(`Espreitar leilões: sem lista (${(e as Error).message})`);
+    return;
+  }
+  // agrupa por produto + janela de 20 min
+  const slots: { productId: string; at: number; count: number }[] = [];
+  for (const it of items) {
+    const at = new Date(it.endDate).getTime() - 10 * 60e3;
+    const s = slots.find((x) => x.productId === it.productId && Math.abs(x.at - at) <= 20 * 60e3);
+    if (s) { s.count++; s.at = Math.min(s.at, at); } else slots.push({ productId: it.productId, at, count: 1 });
+  }
+  slots.sort((a, b) => a.at - b.at);
+  const plan = slots.slice(0, 25);
+  if (!plan.length) return;
+  log(`⏱  ${items.length} leilão(ões) acabam antes do próximo ciclo → ${plan.length} espreitadela(s) agendada(s)`);
+  for (const slot of plan) {
+    while (!stopped() && Date.now() < slot.at) await sleep(5000);
+    if (stopped() || Date.now() > until) return;
+    const p = getProduct(slot.productId);
+    if (!p) continue;
+    log(`⏱  ${p.name}: ${slot.count} leilão(ões) a acabar — a ler lances finais…`);
+    const session = new BrowserSession();
+    try {
+      await scrapeProduct(session, { ...p, extraSearchTerms: [] });
+    } catch (e) {
+      warn(`Espreitadela falhou: ${(e as Error).message}`);
+    } finally {
+      await session.close();
+    }
+  }
+}
+
 async function main() {
   if (CFG.inspect) return inspect(CFG.inspect);
   let stop = false;
@@ -547,6 +598,7 @@ async function main() {
     const wait = jitter(CFG.loopMinutes * 60e3);
     log(`😴 Próximo ciclo às ${new Date(Date.now() + wait).toLocaleTimeString('de-CH')}`);
     const until = Date.now() + wait;
+    if (CFG.closing && !CFG.dryRun) await closingWatch(until, () => stop);
     while (!stop && Date.now() < until) await sleep(5000);
   } while (!stop);
 }

@@ -202,6 +202,17 @@ export function recheckQueue(limit: number, now = new Date()) {
   return due.map(({ r }) => ({ productId: r.productId, id: r.id, url: r.url }));
 }
 
+/** Leilões relevantes, com lances, que terminam nos próximos `withinMin` minutos (para o runner espreitar antes do fim). */
+export function closingSoon(withinMin: number, now = new Date()) {
+  const db = load();
+  const nowMs = now.getTime();
+  return Object.values(db.listings)
+    .filter((r) => r.relevant && r.status === 'active' && r.mode !== 'buynow' && r.bids > 0 && r.endDate)
+    .map((r) => ({ productId: r.productId, id: r.id, endDate: r.endDate! }))
+    .filter((x) => { const t = new Date(x.endDate).getTime(); return t > nowMs && t - nowMs <= withinMin * 60e3; })
+    .sort((a, b) => a.endDate.localeCompare(b.endDate));
+}
+
 /** Aplica o resultado de abrir a página de um anúncio. */
 export function applyDetails(results: (DetailSignals & { productId: string })[], now = new Date()) {
   const db = load();
@@ -272,7 +283,13 @@ function closeStale(db: DB, now: Date) {
     if (r.status !== 'active') continue;
     const endMs = r.endDate ? new Date(r.endDate).getTime() : null;
     const lastSeenMs = new Date(r.lastSeen).getTime();
-    if (endMs && endMs < nowMs - 48 * HOUR && (r.checkAttempts >= 3 || nowMs - lastSeenMs > 48 * HOUR)) {
+    // Visto na pesquisa até ≤ 75 min antes do fim e já terminou há 30 min → o último lance visto
+    // é uma boa estimativa do preço final (as páginas de anúncio estão bloqueadas pela Cloudflare).
+    const seenNearEnd = endMs !== null && endMs - lastSeenMs <= 75 * 60e3 && lastSeenMs <= endMs + 5 * 60e3;
+    if (endMs && endMs < nowMs - 30 * 60e3 && seenNearEnd && r.mode !== 'buynow') {
+      if (r.bids > 0) closeAs(r, iso, 'sold', r.bidPrice, 'auction', 'inferred');
+      else closeAs(r, iso, 'ended_unsold', null, null, null);
+    } else if (endMs && endMs < nowMs - 48 * HOUR && (r.checkAttempts >= 3 || nowMs - lastSeenMs > 48 * HOUR)) {
       if (r.mode !== 'buynow' && r.bids > 0) closeAs(r, iso, 'sold', r.bidPrice, 'auction', 'inferred');
       else closeAs(r, iso, 'ended_unsold', null, null, null);
     } else if (!endMs && nowMs - lastSeenMs > 10 * DAY && (r.missedRuns ?? 0) >= 6) {

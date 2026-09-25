@@ -233,6 +233,21 @@ async function main() {
     console.log(`    → média ${s.sold.mean} · mediana ${s.sold.median} · revenda rápida ${s.pricing.resaleQuick} · comprar até ${s.pricing.recommended!.maxBuy} · liquidez ${s.liquidity.label} (${s.liquidity.score})`);
   });
 
+  await test('leilão visto ~10 min antes do fim → vendido (inferido) ao último lance', () => {
+    const endMs = Date.now() - 40 * 60e3;
+    const seen = new Date(endMs - 10 * 60e3).toISOString();
+    store.ingest({ productId: 'iphone-13', searchTerm: 'x', scrapedAt: seen, complete: false, items: [{
+      id: '1377000001', title: 'iPhone 13 128GB', url: 'https://www.ricardo.ch/de/a/iphone-13-1377000001/', mode: 'auction',
+      bidPrice: 311, buyNowPrice: null, bids: 23, endDate: new Date(endMs).toISOString(), condition: null, source: 'test',
+    }] });
+    const r = store.recordsFor('iphone-13').find((x) => x.id === '1377000001')!;
+    assert.equal(r.status, 'sold');
+    assert.equal(r.finalPrice, 311);
+    assert.equal(r.soldEvidence, 'inferred');
+    const soon = store.closingSoon(600);
+    assert.ok(Array.isArray(soon));
+  });
+
   console.log('\nradar e alertas');
   await test('extras do Ricardo: portes, retirada, cidade, foto, propostas', () => {
     const b = rb['1330575112'];
