@@ -9,9 +9,14 @@ async function main() {
       `https://www.ricardo.ch/api/frontend/v2/search?query=${encodeURIComponent(query)}&page=1`,
       {
         headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
-          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Accept-Language': 'de-CH,de;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Origin': 'https://www.ricardo.ch',
+          'Referer': 'https://www.ricardo.ch/',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-origin',
         },
       }
     );
@@ -21,7 +26,7 @@ async function main() {
     }
 
     const data = (await response.json()) as any;
-    console.log(`Sucesso! Encontrados ${data.totalCount || 0} resultados.`);
+    console.log(`\nSucesso! Encontrados ${data.totalCount || 0} resultados.`);
 
     if (data.articles && data.articles.length > 0) {
       console.log('\nExemplo do primeiro produto encontrado:');
