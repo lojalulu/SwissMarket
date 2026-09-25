@@ -27,35 +27,31 @@ async function main() {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
     );
 
-    // Escuta a resposta da API do Ricardo.ch para pegar o JSON direto
-    let apiData: any = null;
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (url.includes('/api/frontend/v2/search')) {
-        try {
-          apiData = await response.json();
-        } catch (e) {
-          // Ignora se não for JSON
-        }
-      }
-    });
+    console.log('Acessando o Ricardo.ch para estabelecer sessão...');
+    await page.goto('https://www.ricardo.ch/de/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    const searchUrl = `https://www.ricardo.ch/de/s/${encodeURIComponent(query)}`;
-    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    console.log('Sessão estabelecida! Solicitando dados da API no contexto da página...');
 
-    if (apiData && apiData.articles) {
-      console.log(`\n Sucesso! ${apiData.articles.length} produtos capturados da API.\n`);
-      
-      apiData.articles.slice(0, 5).forEach((item: any, index: number) => {
+    // Executa a requisição dentro do próprio navegador aberto
+    const data = await page.evaluate(async (searchQuery) => {
+      const res = await fetch(`https://www.ricardo.ch/api/frontend/v2/search?query=${encodeURIComponent(searchQuery)}&page=1`);
+      return await res.json();
+    }, query);
+
+    if (data && data.articles && data.articles.length > 0) {
+      console.log(`\n Total de ${data.totalCount || data.articles.length} produtos encontrados!\n`);
+
+      data.articles.slice(0, 5).forEach((item: any, index: number) => {
         console.log(`--- Produto ${index + 1} ---`);
         console.log(`Título: ${item.title}`);
         console.log(`Preço Comprar Já: CHF ${item.buyNowPrice || 'N/A'}`);
         console.log(`Preço Lance: CHF ${item.bidPrice || 'N/A'}`);
         console.log(`ID: ${item.id}`);
+        console.log(`Link: https://www.ricardo.ch/de/a/${item.id}`);
         console.log('---------------------\n');
       });
     } else {
-      console.log('Página carregada, mas os dados da API não foram capturados.');
+      console.log('A API respondeu, mas nenhum artigo foi retornado.');
     }
 
     await browser.close();
