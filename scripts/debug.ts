@@ -6,7 +6,7 @@ async function main() {
 
   try {
     const browser = await puppeteer.launch({
-      executablePath: '/data/data/com.termux/files/usr/bin/chromium',
+      executablePath: '/data/data/com.termux/files/usr/bin/chromium-browser',
       headless: true,
       args: [
         '--no-sandbox',
