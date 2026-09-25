@@ -1,25 +1,36 @@
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import fs from 'fs';
+import fetch from 'node-fetch';
 
-puppeteer.use(StealthPlugin());
+async function main() {
+  const query = 'iPhone 13';
+  console.log(`Buscando ofertas no Ricardo.ch para: "${query}"...`);
 
-async function debug() {
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: '/usr/bin/chromium-browser',
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-  const page = await browser.newPage();
-  await page.goto('https://www.ricardo.ch/de/s/iphone/?isEnded=true', { waitUntil: 'networkidle2' });
-  const content = await page.content();
-  fs.writeFileSync('debug.html', content);
-  
-  const isCloudflare = content.includes('Just a moment') || content.includes('Attention Required') || content.includes('cf-challenge');
-  console.log('--- DIAGNÓSTICO DE ACESSO ---');
-  console.log('Tamanho da página recebida:', content.length, 'bytes');
-  console.log('Bloqueio Cloudflare detectado?:', isCloudflare ? 'SIM (IP do servidor bloqueado)' : 'NÃO (Página carregou normal)');
-  
-  await browser.close();
+  try {
+    const response = await fetch(
+      `https://www.ricardo.ch/api/frontend/v2/search?query=${encodeURIComponent(query)}&page=1`,
+      {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Erro na requisição: ${response.status} ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as any;
+    console.log(`Sucesso! Encontrados ${data.totalCount || 0} resultados.`);
+
+    if (data.articles && data.articles.length > 0) {
+      console.log('\nExemplo do primeiro produto encontrado:');
+      console.log(`- Título: ${data.articles[0].title}`);
+      console.log(`- Preço: CHF ${data.articles[0].buyNowPrice || data.articles[0].bidPrice || 'N/A'}`);
+    }
+  } catch (error) {
+    console.error('Erro ao executar a busca:', error);
+  }
 }
-debug();
+
+main();
