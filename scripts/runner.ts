@@ -20,11 +20,11 @@ import fs from 'fs';
 import path from 'path';
 import puppeteer, { type Browser, type HTTPResponse, type Page } from 'puppeteer-core';
 import { activeProducts, getProduct, type ProductConfig } from '../config/products';
-import { isChallengePage, parseDetailPage, parseSearchPage, searchUrl } from '../lib/parse';
+import { isChallengePage, parseDetailPage, parseRscText, parseSearchPage, searchUrl } from '../lib/parse';
 import { checkRelevance } from '../lib/text';
 import type { DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '3.0.1';
+const VERSION = '3.1.0';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────
@@ -101,8 +101,10 @@ class BrowserSession {
   private uses = 0;
   private cookiesAccepted = false;
 
+  constructor(private maxUses = CFG.restartEvery) {}
+
   async getPage(): Promise<Page> {
-    if (this.page && !this.page.isClosed() && this.browser?.connected && this.uses < CFG.restartEvery) {
+    if (this.page && !this.page.isClosed() && this.browser?.connected && this.uses < this.maxUses) {
       this.uses++;
       return this.page;
     }
@@ -326,6 +328,64 @@ async function scrapeProduct(session: BrowserSession, p: ProductConfig): Promise
   }
 }
 
+
+// ───────────────────────────── abrir anúncio "à maneira humana" ─────────────────────────────
+//
+// Abrir /de/a/… diretamente (goto) dispara a Cloudflare. Mas uma pessoa normalmente chega ao anúncio
+// A PARTIR da pesquisa, e o site do Ricardo navega "por dentro" (navegação do Next.js, sem recarregar
+// a página). Fazemos o mesmo: abrimos 1 pesquisa (que passa) e depois navegamos por dentro até cada anúncio.
+
+type DetailOpen = { html: string; finalUrl: string; status: number; challenge: boolean; roots: unknown[]; method: 'app' | 'goto' };
+
+class DetailNavigator {
+  private session = new BrowserSession(10_000);
+  private warmed = false;
+
+  async open(item: { productId: string; id: string; url: string }): Promise<DetailOpen> {
+    if (!this.warmed) {
+      const term = getProduct(item.productId)?.searchTerm ?? 'iphone';
+      const res = await load(this.session, searchUrl(term), true);
+      if (res.challenge) return { ...res, roots: [], method: 'app' };
+      this.warmed = true;
+      await sleep(jitter(3000));
+    }
+    const page = await this.session.getPage();
+    const bodies: string[] = [];
+    const onResp = async (resp: HTTPResponse) => {
+      const ct = resp.headers()['content-type'] ?? '';
+      if (ct.includes('text/x-component') || (resp.url().includes(item.id) && resp.request().resourceType() !== 'document')) {
+        try { bodies.push(await resp.text()); } catch { /* resposta sem corpo */ }
+      }
+    };
+    page.on('response', onResp);
+    try {
+      const path = new URL(item.url).pathname;
+      const pushed = await page.evaluate((p: string) => {
+        const n = (window as any).next;
+        if (n?.router?.push) { n.router.push(p); return true; }
+        return false;
+      }, path).catch(() => false);
+
+      if (!pushed) {
+        const res = await load(this.session, item.url, false);
+        return { ...res, roots: [], method: 'goto' };
+      }
+      await page.waitForFunction((id: string) => location.pathname.includes(id), { timeout: 15_000 }, item.id).catch(() => {});
+      await page.waitForNetworkIdle({ idleTime: 800, timeout: 12_000 }).catch(() => {});
+      await sleep(1000);
+      const html = await page.content();
+      return {
+        html, finalUrl: page.url(), status: 200, challenge: isChallengePage(html),
+        roots: bodies.flatMap((b) => parseRscText(b)), method: 'app',
+      };
+    } finally {
+      page.off('response', onResp);
+    }
+  }
+
+  async close() { await this.session.close(); this.warmed = false; }
+}
+
 // ───────────────────────────── verificação de vendas ─────────────────────────────
 
 async function recheckPhase(session: BrowserSession) {
@@ -353,30 +413,39 @@ async function recheckPhase(session: BrowserSession) {
     }
   };
 
-  for (const item of queue) {
-    if (consecutiveBlocks >= 2) { warn('Cloudflare a bloquear as páginas de anúncio — verificação adiada para o próximo ciclo.'); break; }
-    try {
-      const res = await load(session, item.url, false);
-      if (res.challenge) {
-        consecutiveBlocks++;
-        log(`   · ${item.id} → bloqueado pela Cloudflare`);
-        await session.close();
-        await sleep(jitter(20_000));
-        continue;
+  const nav = new DetailNavigator();
+  try {
+    for (const item of queue) {
+      if (consecutiveBlocks >= 2) { warn('Cloudflare a bloquear as páginas de anúncio — verificação adiada para o próximo ciclo.'); break; }
+      try {
+        const res = await nav.open(item);
+        if (res.challenge) {
+          consecutiveBlocks++;
+          log(`   · ${item.id} → bloqueado pela Cloudflare (${res.method})`);
+          await nav.close();
+          await sleep(jitter(20_000));
+          continue;
+        }
+        consecutiveBlocks = 0;
+        const sig: DetailSignals = res.status === 404 || res.status === 410
+          ? { id: item.id, removed: true, ended: true, soldMarker: false, bids: null, currentPrice: null, buyNowPrice: null, condition: null, endDate: null }
+          : parseDetailPage(item.id, res.html, res.finalUrl, res.roots);
+        const label = sig.removed ? 'removido' : sig.ended === true ? (sig.soldMarker || (sig.bids ?? 0) > 0 ? 'terminou (vendido?)' : 'terminou') : sig.ended === false ? 'ativo' : '?';
+        log(`   · ${item.id} → ${label}${sig.currentPrice ? ` @ CHF ${sig.currentPrice}` : ''}${sig.bids !== null ? ` (${sig.bids} lances)` : ''} [${res.method}]`);
+        if (label === '?') {
+          fs.mkdirSync(CFG.debugDir, { recursive: true });
+          fs.writeFileSync(path.join(CFG.debugDir, `anuncio-${item.id}.html`), res.html);
+        }
+        results.push({ ...sig, productId: item.productId });
+        if (results.length >= 10) await flush();
+      } catch (e) {
+        warn(`Falha ao abrir ${item.url}: ${(e as Error).message}`);
+        await nav.close();
       }
-      consecutiveBlocks = 0;
-      const sig: DetailSignals = res.status === 404 || res.status === 410
-        ? { id: item.id, removed: true, ended: true, soldMarker: false, bids: null, currentPrice: null, buyNowPrice: null, condition: null, endDate: null }
-        : parseDetailPage(item.id, res.html, res.finalUrl);
-      const label = sig.removed ? 'removido' : sig.ended === true ? (sig.soldMarker || (sig.bids ?? 0) > 0 ? 'terminou (vendido?)' : 'terminou') : sig.ended === false ? 'ativo' : '?';
-      log(`   · ${item.id} → ${label}${sig.currentPrice ? ` @ CHF ${sig.currentPrice}` : ''}${sig.bids !== null ? ` (${sig.bids} lances)` : ''}`);
-      results.push({ ...sig, productId: item.productId });
-      if (results.length >= 10) await flush();
-    } catch (e) {
-      warn(`Falha ao abrir ${item.url}: ${(e as Error).message}`);
-      await session.close();
+      await sleep(jitter(CFG.delayMs * 0.7));
     }
-    await sleep(jitter(CFG.delayMs * 0.7));
+  } finally {
+    await nav.close();
   }
   await flush();
 }
@@ -389,12 +458,15 @@ async function inspect(term: string) {
     // --inspect https://www.ricardo.ch/de/a/...  → diagnóstico da página de UM anúncio
     if (/^https?:\/\//.test(term)) {
       const id = term.match(/-(\d{6,})\/?/)?.[1] ?? 'x';
-      const res = await load(session, term, false);
+      const productId = CFG.only[0] ?? activeProducts()[0].id;
+      const nav = new DetailNavigator();
+      const res = await nav.open({ productId, id, url: term });
+      await nav.close();
       fs.mkdirSync(CFG.debugDir, { recursive: true });
       const f = path.join(CFG.debugDir, `inspect-anuncio-${id}.html`);
       fs.writeFileSync(f, res.html);
-      log(`HTTP ${res.status} · desafio: ${res.challenge ? 'SIM' : 'não'} → ${path.relative(ROOT, f)}`);
-      console.log(parseDetailPage(id, res.html, res.finalUrl));
+      log(`método: ${res.method} · desafio: ${res.challenge ? 'SIM' : 'não'} · RSC capturado: ${res.roots.length} blocos → ${path.relative(ROOT, f)}`);
+      console.log(parseDetailPage(id, res.html, res.finalUrl, res.roots));
       return;
     }
     log(`🧪 Diagnóstico de "${term}" → ${searchUrl(term)}`);

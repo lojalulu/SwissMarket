@@ -97,7 +97,11 @@ export function extractRscRoots(html: string): unknown[] {
   while ((m = re.exec(html))) {
     try { text += JSON.parse(`"${m[1]}"`); } catch { /* chunk inválido */ }
   }
-  if (!text) return [];
+  return text ? parseRscText(text) : [];
+}
+
+/** Texto RSC "cru" (linhas "<id>:<json>") → objetos JSON. Também serve para respostas de navegação cliente (?_rsc=). */
+export function parseRscText(text: string): unknown[] {
   const roots: unknown[] = [];
   // 1) cada linha RSC é "<id>:<json>"
   for (const line of text.split('\n')) {
@@ -532,7 +536,7 @@ const ENDED_RE = /Angebot (?:ist )?beendet|Dieses Angebot ist (?:leider )?(?:nic
 const SOLD_RE = /\bVerkauft\b(?! wird)|Artikel wurde verkauft|wurde verkauft|Sofort gekauft|\bVendu\b|\bVenduto\b/i;
 const ACTIVE_RE = /Nächstes Gebot|Gebot abgeben|\|\s*Bieten\s*\||In den Warenkorb|Jetzt kaufen|Sofort kaufen|Enchérir|Fare un'offerta/i;
 
-export function parseDetailPage(id: string, html: string, finalUrl?: string): DetailSignals {
+export function parseDetailPage(id: string, html: string, finalUrl?: string, extraRoots: unknown[] = []): DetailSignals {
   const base: DetailSignals = {
     id, removed: false, ended: null, soldMarker: false, bids: null,
     currentPrice: null, buyNowPrice: null, condition: null, endDate: null,
@@ -545,7 +549,7 @@ export function parseDetailPage(id: string, html: string, finalUrl?: string): De
   // 1) JSON estruturado — procura o objeto do próprio anúncio.
   let endedFlag: boolean | null = null;
   let soldFlag = false;
-  for (const root of [nextData, ...ldJson, ...rsc]) {
+  for (const root of [nextData, ...ldJson, ...rsc, ...extraRoots]) {
     if (!root) continue;
     for (const o of objects(root)) {
       const oid = pick(o, K.id);
