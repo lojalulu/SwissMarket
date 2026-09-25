@@ -6,7 +6,7 @@ async function main() {
 
   try {
     const browser = await puppeteer.launch({
-      executablePath: '/data/data/com.termux/files/usr/bin/chromium-browser',
+      executablePath: '/data/data/com.termux/files/usr/bin/chromium',
       headless: true,
       args: [
         '--no-sandbox',
@@ -17,15 +17,14 @@ async function main() {
     });
 
     const page = await browser.newPage();
-    
-    // Configura um User-Agent real
+
     await page.setUserAgent(
       'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36'
     );
 
     console.log('Navegando até a API do Ricardo.ch...');
     const url = `https://www.ricardo.ch/api/frontend/v2/search?query=${encodeURIComponent(query)}&page=1`;
-    
+
     await page.goto(url, { waitUntil: 'networkidle2' });
 
     const content = await page.evaluate(() => document.body.innerText);
