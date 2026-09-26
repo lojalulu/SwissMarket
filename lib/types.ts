@@ -31,6 +31,9 @@ export interface ScrapedListing {
   /** O vendedor aceita propostas de preço ("Preisvorschlag"). */
   canOffer?: boolean;
   sellerId?: string | null;
+  /** Categoria do Ricardo (ex.: 49329 = telemóveis) — usada para separar consolas de jogos/acessórios. */
+  categoryId?: string | null;
+  productType?: string | null;
 }
 
 /** Sinais lidos na página de um anúncio (a decisão final é feita em lib/store.ts). */
@@ -86,6 +89,10 @@ export interface ListingRecord {
   city?: string | null;
   canOffer?: boolean;
   sellerId?: string | null;
+  categoryId?: string | null;
+  productType?: string | null;
+  /** Passou no filtro de título (independentemente de preço/categoria/estado). */
+  titleOk?: boolean;
   lastSeen: string;
   seenCount: number;
   /** Últimos preços observados (máx. 20) — para ver a evolução dos lances. */

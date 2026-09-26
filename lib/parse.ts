@@ -272,6 +272,8 @@ function extrasFromObject(o: Obj): Partial<ScrapedListing> {
   if (typeof o.canMakeAnOffer === 'boolean') out.canOffer = o.canMakeAnOffer;
   if (typeof o.image === 'string' && /^https?:/.test(o.image)) out.image = o.image;
   if (typeof o.sellerId === 'string' || typeof o.sellerId === 'number') out.sellerId = String(o.sellerId);
+  if (typeof o.categoryId === 'string' || typeof o.categoryId === 'number') out.categoryId = String(o.categoryId);
+  if (typeof o.productTypeKey === 'string') out.productType = o.productTypeKey;
   return out;
 }
 
@@ -514,7 +516,7 @@ export function parseSearchPage(html: string, now = new Date()): SearchParseResu
           : 'buynow';
       if (merged.mode === 'buynow') { merged.bidPrice = null; merged.bids = 0; }
       if (json.startDate) merged.startDate = json.startDate;
-      for (const k of ['image', 'shippingCost', 'pickup', 'zip', 'city', 'canOffer', 'sellerId'] as const) {
+      for (const k of ['image', 'shippingCost', 'pickup', 'zip', 'city', 'canOffer', 'sellerId', 'categoryId', 'productType'] as const) {
         if (json[k] !== undefined) (merged as any)[k] = json[k];
       }
       base = merged;

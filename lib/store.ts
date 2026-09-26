@@ -58,7 +58,7 @@ const key = (productId: string, id: string) => `${productId}:${id}`;
 /** Só copia os extras que vieram definidos (não apaga dados antigos com undefined). */
 function extras(item: ScrapedListing): Partial<ListingRecord> {
   const out: Partial<ListingRecord> = {};
-  for (const k of ['image', 'shippingCost', 'pickup', 'zip', 'city', 'canOffer', 'sellerId'] as const) {
+  for (const k of ['image', 'shippingCost', 'pickup', 'zip', 'city', 'canOffer', 'sellerId', 'categoryId', 'productType'] as const) {
     if (item[k] !== undefined) (out as any)[k] = item[k];
   }
   return out;
@@ -66,7 +66,10 @@ function extras(item: ScrapedListing): Partial<ListingRecord> {
 
 /** Preço dentro da faixa? (lance de leilão abaixo do piso é normal no início → aceita) */
 function priceReason(item: ScrapedListing, p: ProductConfig): string | undefined {
-  if (item.buyNowPrice !== null && (item.buyNowPrice < p.priceFloor || item.buyNowPrice > p.priceCeil)) {
+  const isAuction = item.mode !== 'buynow';
+  // Leilão híbrido com "Sofort" exagerado (ex.: lance 200, Sofort 2'000) continua válido pelo lance;
+  // o Sofort fora da faixa é simplesmente ignorado nas médias.
+  if (item.buyNowPrice !== null && (item.buyNowPrice < p.priceFloor || (!isAuction && item.buyNowPrice > p.priceCeil))) {
     return `preço fora da faixa (${item.buyNowPrice})`;
   }
   if (item.buyNowPrice === null && item.bidPrice !== null && item.bidPrice > p.priceCeil) {
@@ -76,6 +79,46 @@ function priceReason(item: ScrapedListing, p: ProductConfig): string | undefined
     return `lance muito baixo com muitos lances (${item.bidPrice}) — provável acessório`;
   }
   return undefined;
+}
+
+/** Estado declarado pelo vendedor que indica defeito (não serve como referência de revenda). */
+export function badCondition(cond: string | null | undefined): boolean {
+  return !!cond && /damag|defect|broken|parts|bastler|kaputt|beschädigt/i.test(cond);
+}
+
+/**
+ * Categorias do Ricardo aceites para um produto, APRENDIDAS dos próprios anúncios:
+ * "âncoras" = título certo + preço Sofort dentro da faixa (ou seja, o produto a sério).
+ * Ex.: Switch 2 → categoria "Konsolen"; jogos ("Games") e comandos ficam de fora.
+ * Devolve null enquanto houver menos de 5 âncoras (sem filtro).
+ */
+export function acceptedCategories(p: ProductConfig, records: ListingRecord[], extra: ScrapedListing[] = []): Set<string> | null {
+  const counts = new Map<string, number>();
+  const seenIds = new Set<string>();
+  const add = (id: string, cat: string | null | undefined, titleOk: boolean, buyNow: number | null) => {
+    if (!cat || !titleOk || seenIds.has(id) || buyNow === null || buyNow < p.priceFloor || buyNow > p.priceCeil) return;
+    seenIds.add(id);
+    counts.set(cat, (counts.get(cat) ?? 0) + 1);
+  };
+  for (const it of extra) add(it.id, it.categoryId, checkRelevance(it.title, it.url, p).relevant, it.buyNowPrice);
+  for (const r of records) add(r.id, r.categoryId, r.titleOk ?? r.relevant, r.buyNowPrice);
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  if (total < 5) return null;
+  return new Set([...counts.entries()].filter(([, n]) => n / total >= 0.15).map(([c]) => c));
+}
+
+/** Registos com a relevância recalculada pelas regras atuais (categoria + estado), inclusive os antigos. */
+export function effectiveRecords(productId: string): ListingRecord[] {
+  const p = getProduct(productId);
+  const recs = recordsFor(productId);
+  if (!p) return recs;
+  const cats = acceptedCategories(p, recs);
+  return recs.map((r) => {
+    if (!r.relevant) return r;
+    if (cats && r.categoryId && !cats.has(r.categoryId)) return { ...r, relevant: false, rejectReason: `outra categoria (${r.categoryId})` };
+    if (badCondition(r.condition)) return { ...r, relevant: false, rejectReason: `estado: ${r.condition}` };
+    return r;
+  });
 }
 
 export interface IngestResult {
@@ -99,11 +142,17 @@ export function ingest(payload: IngestPayload): IngestResult {
   const samples: { title: string; reason: string }[] = [];
   const seen = new Set<string>();
 
+  const cats = acceptedCategories(p, Object.values(db.listings).filter((r) => r.productId === p.id), payload.items);
+
   for (const item of payload.items) {
     if (!item?.id || !/^\d{6,}$/.test(String(item.id))) continue;
     const rel = checkRelevance(item.title ?? '', item.url ?? '', p);
-    const reason = rel.relevant ? priceReason(item, p) : rel.reason;
+    const reason = !rel.relevant ? rel.reason
+      : cats && item.categoryId && !cats.has(item.categoryId) ? `outra categoria (${item.categoryId})`
+      : badCondition(item.condition) ? `estado: ${item.condition}`
+      : priceReason(item, p);
     const relevant = !reason;
+    const titleOk = rel.relevant;
     if (relevant) relevantCount++;
     else {
       const bucket = reason!.replace(/\s*\(.*$/, '').replace(/:.*/, '');
@@ -122,7 +171,7 @@ export function ingest(payload: IngestPayload): IngestResult {
         bidPrice: item.bidPrice, buyNowPrice: item.buyNowPrice, bids: item.bids,
         endDate: item.endDate, startDate: item.startDate ?? null, condition: item.condition,
         ...extras(item),
-        relevant, rejectReason: reason,
+        relevant, rejectReason: reason, titleOk,
         firstSeen: now, lastSeen: now, seenCount: 1, history: [snap],
         status: 'active', finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null,
         checkAttempts: 0, lastCheckAt: null, missedRuns: 0,
@@ -145,7 +194,7 @@ export function ingest(payload: IngestPayload): IngestResult {
         condition: item.condition ?? prev.condition,
         startDate: item.startDate ?? prev.startDate ?? null,
         ...extras(item),
-        relevant, rejectReason: reason,
+        relevant, rejectReason: reason, titleOk,
         lastSeen: now,
         seenCount: prev.seenCount + 1,
         missedRuns: 0,
@@ -157,10 +206,19 @@ export function ingest(payload: IngestPayload): IngestResult {
     }
   }
 
-  // Anúncios que não apareceram nesta leitura completa → contador (candidatos a verificação).
+  // Anúncios que não apareceram nesta leitura completa → contador.
   if (payload.complete && payload.items.length > 0) {
+    // Página NÃO cheia (< 55 anúncios) = vimos TODO o inventário deste produto. Então um "Sofort kaufen"
+    // que desaparece 2 leituras seguidas antes do fim previsto foi, muito provavelmente, vendido.
+    const fullInventory = payload.items.length < 55;
+    const nowMs = Date.parse(now);
     for (const [k, r] of Object.entries(db.listings)) {
-      if (r.productId === p.id && r.status === 'active' && !seen.has(k)) r.missedRuns = (r.missedRuns ?? 0) + 1;
+      if (r.productId !== p.id || r.status !== 'active' || seen.has(k)) continue;
+      r.missedRuns = (r.missedRuns ?? 0) + 1;
+      const endsLater = !r.endDate || Date.parse(r.endDate) > nowMs + 30 * 60e3;
+      if (fullInventory && r.mode === 'buynow' && r.missedRuns >= 2 && endsLater) {
+        closeAs(r, now, 'gone', null, null, null); // "venda Sofort provável" (preço = buyNowPrice)
+      }
     }
   }
 

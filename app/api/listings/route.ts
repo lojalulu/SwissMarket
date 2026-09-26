@@ -1,7 +1,7 @@
 // GET /api/listings?productId=iphone-13[&status=active|sold|all][&rejected=1] — anúncios brutos para auditoria.
 import { NextResponse } from 'next/server';
 import { getProduct } from '@/config/products';
-import { maintain, recordsFor } from '@/lib/store';
+import { effectiveRecords, maintain } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   if (!getProduct(id)) return NextResponse.json({ success: false, error: 'productId inválido.' }, { status: 404 });
   const status = sp.get('status') ?? 'all';
   const rejected = sp.get('rejected') === '1';
-  const rows = recordsFor(id)
+  const rows = effectiveRecords(id)
     .filter((r) => (rejected ? !r.relevant : r.relevant))
     .filter((r) => status === 'all' || r.status === status)
     .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))

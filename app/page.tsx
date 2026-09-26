@@ -232,6 +232,7 @@ function RadarView({ opps }: { opps: Opp[] }) {
                     {o.nearby && <span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-violet-200 ring-1 ring-violet-400/20"><MapPin className="inline h-3 w-3" /> {o.city}</span>}
                     <span className={`${CONF[o.confidence as keyof typeof CONF] ?? "text-slate-400"}`}>conf. {o.confidence}</span>
                     <span className="text-slate-500">score {o.score}</span>
+                    {o.suspicious && <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-rose-200 ring-1 ring-rose-400/30">⚠️ bom demais — confira estado/autenticidade</span>}
                   </div>
                   <a href={o.url} target="_blank" rel="noreferrer" className="line-clamp-2 text-sm text-slate-100 hover:text-white">
                     <span className="text-slate-400">{o.product} · </span>{o.title}
@@ -239,10 +240,10 @@ function RadarView({ opps }: { opps: Opp[] }) {
                   <div className="tabular mt-1 flex flex-wrap items-baseline gap-x-3 text-sm">
                     <span className="font-semibold text-white">
                       {o.kind === "offer" ? <>propor {chf(o.offerPrice)} <span className="font-normal text-slate-400">(pedem {chf(o.price)})</span></>
-                        : o.kind === "auction" ? <>lance {chf(o.price)}</> : chf(o.price)}
+                        : o.kind === "auction" ? <>lance {chf(o.price)} <span className="font-normal text-sky-300">→ licite até {chf(o.maxBid)}</span></> : chf(o.price)}
                     </span>
                     {!o.nearby && o.shipping ? <span className="text-xs text-slate-400">+ portes {chf(o.shipping)}</span> : null}
-                    <span className="text-emerald-300">lucro ≈ {chf(o.estProfit)} ({o.roiPct}%)</span>
+                    <span className="text-emerald-300">{o.kind === "auction" ? "lucro mínimo" : "lucro"} ≈ {chf(o.estProfit)} ({o.roiPct}%)</span>
                     {o.resale && <span className="text-xs text-slate-500">revenda ~{chf(o.resale)}{o.basis === "pedidos" ? " (estimada pelos preços pedidos)" : ""}</span>}
                   </div>
                   <div className="mt-2 flex gap-2">
@@ -384,6 +385,7 @@ function Details({ p }: { p: ProductStats }) {
             [<><TrendingUp className="mr-1 inline h-3.5 w-3.5 text-emerald-300" />Vendidos</>, p.sold],
             [<><Gavel className="mr-1 inline h-3.5 w-3.5 text-sky-300" />Leilões ≥3 lances (fim em 24 h)</>, p.active.auctionBids],
             [<><Tag className="mr-1 inline h-3.5 w-3.5 text-orange-300" />Sofort pedidos</>, p.active.askingBuyNow],
+            [<><Zap className="mr-1 inline h-3.5 w-3.5 text-violet-300" />Sofort vendidos (prováveis)</>, p.probableBuyNow],
           ] as const).map(([label, d], i) => (
             <tr key={i} className="border-t border-white/5">
               <td className="py-1.5">{label}</td>

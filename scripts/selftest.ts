@@ -248,6 +248,33 @@ async function main() {
     assert.ok(Array.isArray(soon));
   });
 
+  await test('categoria aprendida: jogos/comandos (outra categoria) saem do Switch 2', () => {
+    const t = new Date().toISOString();
+    const base = { mode: 'buynow' as const, bidPrice: null, bids: 0, endDate: new Date(Date.now() + 5 * 864e5).toISOString(), condition: 'like_new', source: 'test' };
+    const consoles = Array.from({ length: 6 }, (_, i) => ({ ...base, id: String(1500000000 + i), title: `Nintendo Switch 2 Konsole ${i}`, url: `https://www.ricardo.ch/de/a/switch-2-${1500000000 + i}/`, buyNowPrice: 380 + i * 10, categoryId: '40001' }));
+    const game = { ...base, id: '1500000100', title: 'Kirby Air Riders Switch 2', url: 'https://www.ricardo.ch/de/a/kirby-1500000100/', mode: 'auction' as const, buyNowPrice: null, bidPrice: 25, bids: 0, categoryId: '40999' };
+    const broken = { ...base, id: '1500000101', title: 'Nintendo Switch 2 Konsole', url: 'https://www.ricardo.ch/de/a/sw-1500000101/', buyNowPrice: 300, categoryId: '40001', condition: 'damaged' };
+    const r = store.ingest({ productId: 'switch-2', searchTerm: 'nintendo switch 2', scrapedAt: t, complete: false, items: [...consoles, game, broken] });
+    assert.equal(r.relevant, 6);
+    assert.ok(r.rejected.some((x) => x.reason.startsWith('outra categoria')));
+    assert.ok(r.rejected.some((x) => x.reason.startsWith('estado')));
+  });
+  await test('Sofort que some com inventário completo à vista → venda provável', () => {
+    const t1 = new Date(Date.now() - 6 * 3600e3).toISOString();
+    const t2 = new Date(Date.now() - 3 * 3600e3).toISOString();
+    const t3 = new Date().toISOString();
+    const mk = (id: number, price: number) => ({ id: String(id), title: 'Sony WH-1000XM5 schwarz', url: `https://www.ricardo.ch/de/a/sony-${id}/`, mode: 'buynow' as const,
+      bidPrice: null, buyNowPrice: price, bids: 0, endDate: new Date(Date.now() + 9 * 864e5).toISOString(), condition: null, source: 'test' });
+    const all = [mk(1600000001, 220), mk(1600000002, 240), mk(1600000003, 260)];
+    store.ingest({ productId: 'sony-wh1000xm5', searchTerm: 'x', scrapedAt: t1, complete: true, items: all });
+    store.ingest({ productId: 'sony-wh1000xm5', searchTerm: 'x', scrapedAt: t2, complete: true, items: all.slice(1) });
+    store.ingest({ productId: 'sony-wh1000xm5', searchTerm: 'x', scrapedAt: t3, complete: true, items: all.slice(1) });
+    const r = store.recordsFor('sony-wh1000xm5').find((x) => x.id === '1600000001')!;
+    assert.equal(r.status, 'gone');
+    const still = store.recordsFor('sony-wh1000xm5').find((x) => x.id === '1600000002')!;
+    assert.equal(still.status, 'active');
+  });
+
   console.log('\nradar e alertas');
   await test('extras do Ricardo: portes, retirada, cidade, foto, propostas', () => {
     const b = rb['1330575112'];
@@ -295,6 +322,9 @@ async function main() {
     assert.equal(byId['auction'].kind, 'auction');
     assert.ok(byId['auction'].minutesLeft! > 0 && byId['auction'].minutesLeft! <= 150);
     assert.equal(byId['auction-far'], undefined);         // termina daqui a 3 dias → não é urgente
+    assert.equal(byId['auction'].maxBid, max);             // sem portes (shipping indefinido)
+    assert.equal(byId['auction'].estProfit, st.pricing.recommended!.profitAtMaxBuy); // pior caso
+    assert.equal(byId['cheap-near'].suspicious, false);
     assert.ok(st.sell.buyNowPrice! > 350);
     assert.ok(st.liquidity.daysOfSupply !== null);
     const { formatAlert } = require('../lib/alerts') as typeof import('../lib/alerts');

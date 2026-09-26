@@ -113,6 +113,10 @@ export interface Opportunity {
   roiPct: number;
   /** Para "offer": valor a propor ao vendedor. */
   offerPrice: number | null;
+  /** Leilão: lance máximo a dar (já descontados os portes). */
+  maxBid: number | null;
+  /** Preço bom demais para ser verdade (< 45 % da mediana): acessório, defeito escondido ou golpe? */
+  suspicious: boolean;
   /** 0–100: lucro, liquidez, confiança e urgência. */
   score: number;
 }
@@ -126,6 +130,8 @@ export interface ProductStats {
   tracking: { firstRun: string | null; lastRun: string | null; daysTracked: number; runs24h: number; lastFound: number; lastRelevant: number };
   counts: { active: number; rejectedActive: number; soldConfirmed: number; soldInferred: number; probableSales: number; endedUnsold: number; pendingCheck: number };
   active: { askingBuyNow: Dist; auctionBids: Dist; auctionsWithBidsPct: number | null; avgBids: number | null; auctions: number };
+  /** "Sofort kaufen" que desapareceram antes do fim com o inventário completo à vista (vendas prováveis). */
+  probableBuyNow: Dist;
   sold: Dist;
   liquidity: {
     label: LiquidityLabel;
@@ -208,7 +214,10 @@ export function computeProductStats(
 ): ProductStats {
   const nowMs = now.getTime();
   const since = nowMs - windowDays * DAY;
-  const relevant = records.filter((r) => r.relevant);
+  const relevantAll = records.filter((r) => r.relevant);
+  // Quem revende, revende usado: se houver ≥ 5 usados, anúncios "novo/selado" não entram nas médias.
+  const isNew = (r: ListingRecord) => /^new|brand_new|neu$|^neu\b/i.test(r.condition ?? '');
+  const relevant = relevantAll.filter((r) => !isNew(r)).length >= 5 ? relevantAll.filter((r) => !isNew(r)) : relevantAll;
   const inBand = (v: number | null | undefined) => typeof v === 'number' && v >= p.priceFloor && v <= p.priceCeil;
 
   // ── ativos
@@ -310,17 +319,23 @@ export function computeProductStats(
       const nearby = !!r.pickup && !!r.zip && homeZips.some((z) => r.zip!.startsWith(z));
       const cost = r2(price + (nearby ? 0 : r.shippingCost ?? 0));
       const buyAt = offerPrice ?? cost;
-      const profit = r2(recommended.net - buyAt);
-      const roi = Math.round((profit / Math.max(buyAt, 1)) * 100);
+      const shipCost = nearby ? 0 : r.shippingCost ?? 0;
+      // Leilão: o preço vai subir → lucro calculado no pior caso (ganhar pelo lance máximo).
+      const maxBid = kind === 'auction' ? Math.max(0, Math.floor(limit - shipCost)) : null;
+      const profit = r2(recommended.net - (kind === 'auction' ? limit : buyAt));
+      const suspicious = kind !== 'auction' && buyAt < median * 0.45;
+      const roi = Math.round((profit / Math.max(kind === 'auction' ? limit : buyAt, 1)) * 100);
       const minutesLeft = r.endDate ? Math.round((new Date(r.endDate).getTime() - nowMs) / 60e3) : null;
       const urgency = kind === 'auction' && minutesLeft !== null ? Math.max(0, 15 - minutesLeft / 24) : 0;
-      const score = Math.round(Math.max(0, Math.min(100,
-        Math.min(roi, 80) * 0.6 + (liquidity.score ?? 30) * 0.3 + confBonus + urgency + (nearby ? 4 : 0))));
+      const roiNow = Math.round(((recommended.net - buyAt) / Math.max(buyAt, 1)) * 100);
+      let score = Math.round(Math.max(0, Math.min(100,
+        Math.min(roiNow, 80) * 0.6 + (liquidity.score ?? 30) * 0.3 + confBonus + urgency + (nearby ? 4 : 0))));
+      if (suspicious) score = Math.round(score * 0.4);
       return {
         id: r.id, title: r.title, url: r.url, image: r.image ?? null, mode: r.mode, kind, price,
         shipping: r.shippingCost ?? null, pickup: !!r.pickup, city: r.city ?? null, nearby, cost, bids: r.bids,
         endDate: r.endDate, minutesLeft, discountPct: Math.round((1 - buyAt / median) * 100),
-        estProfit: profit, roiPct: roi, offerPrice, score,
+        estProfit: profit, roiPct: roi, offerPrice, maxBid, suspicious, score,
       };
     };
     for (const r of fresh) {
@@ -390,6 +405,7 @@ export function computeProductStats(
       pendingCheck,
     },
     active: { askingBuyNow: dist(asking), auctionBids: dist(hotBids), auctionsWithBidsPct, avgBids, auctions: auctions.length },
+    probableBuyNow: dist(probable.map((r) => r.buyNowPrice).filter(inBand) as number[]),
     sold: soldDist,
     liquidity,
     sell: { buyNowPrice: sellBuyNow, note: sellNote, bestEndSlots },

@@ -180,7 +180,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     id: 'switch-2', name: 'Nintendo Switch 2', category: 'gaming',
     searchTerm: 'nintendo switch 2',
     mustInclude: [['switch 2', 'switch2']],
-    exclude: ['oled', 'lite', 'hulle', 'huelle', 'case', 'tasche', 'schutzfolie', 'dock only', 'nur dock', 'joy con only', 'grip', 'spiel', 'game key card'],
+    exclude: ['oled', 'lite', 'hulle', 'huelle', 'case', 'tasche', 'schutzfolie', 'dock only', 'nur dock', 'nur joy con', 'joy con only', 'grip', 'game key card', 'pro controller', 'nur controller', 'amiibo', 'edition card', 'directors cut', 'ladestation', 'kamera', 'camera', 'headset'],
     priceFloor: 250, priceCeil: 650, feeRate: 0.12,
   },
   {
@@ -196,14 +196,14 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     searchTerm: 'playstation 5 konsole',
     extraSearchTerms: ['ps5 konsole'],
     mustInclude: [['playstation 5', 'ps 5', 'ps5', 'playstation5']],
-    exclude: ['digital', 'controller only', 'nur controller', 'cover', 'faceplate', 'ladestation', 'headset', 'pro', 'portal', 'vr'],
+    exclude: ['digital', 'controller only', 'nur controller', 'cover', 'faceplate', 'ladestation', 'headset', 'pro', 'portal', 'vr', 'dualsense edge'],
     priceFloor: 200, priceCeil: 650, feeRate: 0.12,
   },
   {
     id: 'switch-oled', name: 'Nintendo Switch OLED', category: 'gaming',
     searchTerm: 'nintendo switch oled',
     mustInclude: [['switch'], ['oled']],
-    exclude: ['hulle', 'huelle', 'case', 'tasche', 'schutzfolie', 'dock only', 'nur dock', 'lite', 'switch 2', 'joy con only'],
+    exclude: ['hulle', 'huelle', 'case', 'tasche', 'schutzfolie', 'dock only', 'nur dock', 'lite', 'switch 2', 'joy con only', 'nur joy con', 'pro controller', 'amiibo'],
     priceFloor: 150, priceCeil: 450, feeRate: 0.12,
   },
   {
