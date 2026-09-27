@@ -42,7 +42,7 @@ Respeita o `robots.txt` do Ricardo: só abre `/de/s/<termo>/` (sem `?`) e págin
   - 🤝 **Aceita proposta**: vendedor aceita "Preisvorschlag" e pede até 25 % acima do teto → botão copia a mensagem em alemão
   - 📍 **Retirada perto** (`HOME_ZIPS`): sem portes e podes verificar o artigo antes de pagar
 - **Alertas** no telemóvel via ntfy ou Telegram, sem repetição (novo aviso só se o preço cair ≥ 5 %)
-- **Ranking**: produtos por liquidez, vendas/30 dias e **dias de estoque** (anúncios ativos ÷ vendas por dia)
+- **Ranking**: produtos por liquidez, chance de vender em 7 dias e **dias de estoque** (anúncios ao preço de mercado ÷ vendas por dia)
 - **Para revender**: preço Sofort sugerido e as faixas de dia/hora em que os leilões fecham mais alto
 
 Teste dos alertas: `http://IP:3000/api/alerts/test?token=SEU_TOKEN`
@@ -89,7 +89,13 @@ Opções do runner:
 - **Comprar até** = `min(líquido ÷ (1 + margem), líquido − lucro mínimo)`, onde `líquido = revenda rápida − comissão Ricardo − custos`.
   - Comissão (help.ricardo.ch, 2026): smartphones 10 %, eletrónica/gaming/moda 12 %, **teto CHF 290**
   - Padrões: margem 20 %, lucro mínimo CHF 40, custos CHF 5 (ajustáveis por produto em `config/products.ts`)
-- **Liquidez** (0–100): vendas por 30 dias, taxa de venda (vendidos ÷ terminados) e dias até vender. Nos primeiros 3 dias, e enquanto houver poucas vendas registadas, é **estimada** a partir da % de leilões ativos com lances.
+- **Liquidez** (0–100): média bayesiana de 5 sinais, cada um pesado pelas provas que tem (n ÷ (n + k)), mais um "neutro" de 50 com peso fixo que evita conclusões com poucos dados:
+  - **Absorção** (35 %): vendas/dia ÷ anúncios ao preço de mercado (≤ 110 % do preço de referência) → chance de um anúncio vender em 7 dias = 1 − e^(−7·vendas/dia ÷ oferta). Também mostra os **dias de estoque** e o **pior caso** (limite inferior de 80 % da taxa de Poisson).
+  - **Procura agora** (25 %): % de leilões ativos com lances e média de lances.
+  - **Leilões que vendem** (15 %): vendidos ÷ terminados, com prior Beta(2,2) (1 de 1 = 60 %, não 100 %).
+  - **Velocidade** (15 %): 100·e^(−dias até vender ÷ 7).
+  - **Preço estável** (10 %): 1 − (P75 − P25) ÷ mediana ÷ 0,6.
+  - Rótulos: ≥ 60 rápido, ≥ 40 médio, abaixo lento. O detalhe de cada produto mostra "Por que este giro?".
 - **Confiança**: `alta` com 10 ou mais vendas, `media` com 5–9, `baixa` quando se baseia em lances ativos ou preços pedidos.
 
 > Os números ficam fiáveis depois de **7–14 dias** de recolha: é o tempo de os leilões observados terminarem e serem confirmados.

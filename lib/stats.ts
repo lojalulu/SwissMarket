@@ -147,8 +147,16 @@ export interface ProductStats {
     salesPer30d: number | null;
     sellThroughPct: number | null;
     medianDaysToSell: number | null;
-    /** Anúncios ativos ÷ vendas por dia: quantos dias de "estoque" o mercado tem. */
+    /** Anúncios ao preço de mercado ÷ vendas por dia: quantos dias de "estoque" o mercado tem. */
     daysOfSupply: number | null;
+    /** O mesmo, no pior caso estatístico (limite inferior de 80 % da taxa de vendas). */
+    daysOfSupplyWorst: number | null;
+    /** Anúncios ativos a ≤ 110 % do preço de mercado (a concorrência real). */
+    competingListings: number;
+    /** Chance (%) de um anúncio ao preço de mercado vender em 7 dias. */
+    sellChance7d: number | null;
+    /** Sinais que compõem a nota (valor 0–100 e peso). */
+    components: LiquidityComponent[];
   };
   /** Sugestões para quem vai REVENDER. */
   sell: { buyNowPrice: number | null; note: string; bestEndSlots: { slot: string; median: number; n: number }[] };
@@ -170,6 +178,21 @@ export interface ProductStats {
 }
 
 const DAY = 24 * 3600e3;
+
+export interface LiquidityComponent {
+  key: 'absorcao' | 'sucesso' | 'procura' | 'velocidade' | 'estabilidade';
+  label: string;
+  value: number;
+  weight: number;
+  detail: string;
+}
+
+/** Limite inferior (80 %, unilateral) de uma contagem de Poisson — aproximação de Wilson–Hilferty. */
+export function poissonLower80(k: number): number {
+  if (k <= 0) return 0;
+  const z = 0.8416;
+  return k * Math.pow(Math.max(0, 1 - 1 / (9 * k) - z / (3 * Math.sqrt(k))), 3);
+}
 
 function isoWeek(d: Date): string {
   const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -255,52 +278,80 @@ export function computeProductStats(
   const daysTracked = firstRun ? Math.max(0, (nowMs - new Date(firstRun).getTime()) / DAY) : 0;
   const runs24h = runs.filter((r) => new Date(r.at).getTime() >= nowMs - DAY).length;
 
-  // ── liquidez
-  // Duas fontes, misturadas conforme a quantidade de provas:
-  //   • "procura" (desde o 1º dia): % de leilões ativos com lances + média de lances
-  //   • "vendas reais": vendas/mês, % que vende, dias até vender
-  // Peso das vendas = nº de fechos ÷ 8 (com 8+ fechos, só as vendas contam). Antes, as vendas só
-  // entravam depois de 3 dias → produtos sem nenhuma venda podiam ficar à frente de quem já vendeu.
+  // ── liquidez (média bayesiana de sinais medidos)
+  // Cada sinal vale 0–100 e pesa conforme as provas que tem (n ÷ (n + k)). Um "sinal neutro" de 50 com
+  // peso fixo puxa a nota para o meio quando há poucas provas — 1 venda nunca vale tanto como 10.
   const effDays = Math.min(windowDays, Math.max(daysTracked, 1));
   const salesCount = sold.length + 0.5 * probable.length;
   const closedCount = sold.length + endedUnsold.length;
-  const evidence = closedCount + probable.length;
-  const label = (sc: number): LiquidityLabel => (sc >= 65 ? 'rapido' : sc >= 40 ? 'medio' : 'lento');
+  const label = (sc: number): LiquidityLabel => (sc >= 60 ? 'rapido' : sc >= 40 ? 'medio' : 'lento');
+  const rel = (n: number, k: number) => (n > 0 ? n / (n + k) : 0);
 
-  const demandScore = auctionsWithBidsPct !== null && avgBids !== null && auctions.length >= 5
-    ? Math.round(50 + (auctionsWithBidsPct * 0.5 + Math.min(avgBids, 10) * 5 - 50) * Math.min(1, auctions.length / 15))
-    : null;
+  // Oferta concorrente: anúncios a um preço que pode vender (≤ 110 % do preço de mercado).
+  // Sofort caríssimos que ficam meses parados não "competem" com quem anuncia ao preço certo.
+  // Com < 3 vendas, o preço de mercado junta vendas e pedidos (−10 %), como no preço de revenda.
+  const refPrice = soldDist.n >= 3 ? soldDist.median : dist([...sold.map((r) => r.finalPrice!), ...asking.map((v) => v * 0.9)]).median;
+  const priceNow = (r: ListingRecord) => (r.mode === 'buynow' ? r.buyNowPrice : r.mode === 'auction' ? r.bidPrice : Math.min(r.bidPrice ?? Infinity, r.buyNowPrice ?? Infinity));
+  const competing = refPrice ? fresh.filter((r) => { const v = priceNow(r); return v === null || !Number.isFinite(v) || v <= refPrice * 1.1; }).length : fresh.length;
 
-  let salesScore: number | null = null;
-  let salesPer30d: number | null = null;
-  let sellThrough: number | null = null;
-  let medDays: number | null = null;
-  if (evidence >= 1) {
-    salesPer30d = r2((salesCount / effDays) * 30);
-    sellThrough = closedCount ? Math.round((sold.length / closedCount) * 100) : null;
-    const daysToSell = sold.map((r) => (new Date(r.closedAt!).getTime() - new Date(r.startDate ?? r.firstSeen).getTime()) / DAY).filter((d) => d >= 0).sort((a, b) => a - b);
-    medDays = daysToSell.length ? Math.round(quantile(daysToSell, 0.5) * 10) / 10 : null;
-    salesScore = Math.round(
-      Math.min(salesPer30d * 2.5, 50) +
-      (sellThrough ?? 50) * 0.3 +
-      (medDays === null ? 8 : medDays <= 3 ? 20 : medDays <= 7 ? 12 : medDays <= 14 ? 6 : 0),
-    );
+  const salesPerDay = salesCount / effDays;
+  const salesPer30d = salesCount > 0 ? r2(salesPerDay * 30) : null;
+  const sellThrough = closedCount ? Math.round((sold.length / closedCount) * 100) : null;
+  const daysToSell = sold.map((r) => (new Date(r.closedAt!).getTime() - new Date(r.startDate ?? r.firstSeen).getTime()) / DAY).filter((d) => d >= 0).sort((a, b) => a - b);
+  const medDays = daysToSell.length ? Math.round(quantile(daysToSell, 0.5) * 10) / 10 : null;
+  const supply = Math.max(competing, 1);
+  const daysOfSupply = salesPerDay > 0 ? r2(supply / salesPerDay) : null;
+  // Pior caso: limite inferior (80 %) da taxa de Poisson → quantas vendas/dia no mínimo, com o que já vimos.
+  const lowRate = poissonLower80(salesCount) / effDays;
+  const daysOfSupplyWorst = lowRate > 0 ? r2(supply / lowRate) : null;
+  // Chance de UM anúncio vender numa semana (duração típica de um leilão): 1 − e^(−7 · vendas/dia ÷ oferta).
+  const sellChance7d = salesPerDay > 0 ? Math.round((1 - Math.exp((-7 * salesPerDay) / supply)) * 100) : daysTracked >= 3 ? 0 : null;
+
+  const components: LiquidityComponent[] = [];
+  const add = (key: LiquidityComponent['key'], labelTxt: string, value: number, base: number, reliability: number, detail: string) => {
+    if (reliability > 0) components.push({ key, label: labelTxt, value: Math.round(Math.max(0, Math.min(100, value))), weight: r2(base * reliability), detail });
+  };
+  if (salesCount > 0) {
+    add('absorcao', 'Absorção do mercado', sellChance7d!, 0.35, rel(salesCount, 3),
+      `${r2(salesPerDay)} vendas/dia para ${competing} anúncios ao preço de mercado → ${sellChance7d}% de chance de vender em 7 dias`);
+  } else if (daysTracked >= 1 && fresh.length) {
+    // Nenhuma venda em X dias também é prova (fraca no início, forte com o tempo).
+    add('absorcao', 'Absorção do mercado', 0, 0.35, 0.5 * Math.min(1, daysTracked / 7), `nenhuma venda em ${Math.round(daysTracked * 10) / 10} dias`);
+  }
+  if (closedCount > 0) {
+    // Taxa de sucesso com prior Beta(2,2): 1 de 1 vira 60 %, não 100 %.
+    add('sucesso', 'Leilões que vendem', ((sold.length + 2) / (closedCount + 4)) * 100, 0.15, rel(closedCount, 3),
+      `${sold.length} de ${closedCount} leilões terminados venderam`);
+  }
+  if (auctionsWithBidsPct !== null && avgBids !== null) {
+    add('procura', 'Procura agora', auctionsWithBidsPct * 0.5 + Math.min(avgBids, 10) * 5, 0.25, rel(auctions.length, 5),
+      `${auctionsWithBidsPct}% dos ${auctions.length} leilões ativos têm lances (média ${avgBids})`);
+  }
+  if (medDays !== null) {
+    add('velocidade', 'Velocidade de venda', 100 * Math.exp(-medDays / 7), 0.15, rel(daysToSell.length, 3),
+      `vendem em ~${medDays} dias (mediana)`);
+  }
+  if (soldDist.n >= 3 && soldDist.median) {
+    // Mercado líquido = preços previsíveis. Dispersão (P75−P25)/mediana: 0 → 100 pts, ≥ 60 % → 0.
+    const disp = (soldDist.p75! - soldDist.p25!) / soldDist.median;
+    add('estabilidade', 'Preço estável', 100 * (1 - disp / 0.6), 0.1, rel(soldDist.n, 5),
+      `vendas entre ${Math.round(soldDist.p25!)} e ${Math.round(soldDist.p75!)} (±${Math.round(disp * 50)}%)`);
   }
 
   let liquidity: ProductStats['liquidity'];
-  if (salesScore === null && demandScore === null) {
-    liquidity = { label: 'sem_dados', score: null, basis: 'sem_dados', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null, daysOfSupply: null };
+  if (!components.length) {
+    liquidity = { label: 'sem_dados', score: null, basis: 'sem_dados', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null, daysOfSupply: null, daysOfSupplyWorst: null, competingListings: competing, sellChance7d: null, components: [] };
   } else {
-    const w = salesScore === null ? 0 : demandScore === null ? 1 : Math.min(1, evidence / 8);
-    // Só vendas e poucas (ex.: 2) → puxa a nota para 50 (neutro) até haver ≥ 5 fechos.
-    const salesAdj = salesScore !== null && demandScore === null ? 50 + (salesScore - 50) * Math.min(1, evidence / 5) : salesScore;
-    const score = Math.round(w * (salesAdj ?? 0) + (1 - w) * (demandScore ?? 0));
-    // Vendas por mês extrapoladas de < 3 dias são ruidosas → só mostramos a partir de 3 dias.
+    const PRIOR_W = 0.15;
+    const wSum = components.reduce((a, c) => a + c.weight, 0);
+    const score = Math.round((PRIOR_W * 50 + components.reduce((a, c) => a + c.weight * c.value, 0)) / (PRIOR_W + wSum));
+    const salesW = components.filter((c) => c.key !== 'procura').reduce((a, c) => a + c.weight, 0);
     const showRate = daysTracked >= 3;
     liquidity = {
-      label: label(score), score, basis: w >= 0.5 ? 'vendas' : 'estimada',
+      label: label(score), score, basis: salesCount > 0 && salesW >= wSum / 2 ? 'vendas' : 'estimada',
       salesPer30d: showRate ? salesPer30d : null, sellThroughPct: sellThrough, medianDaysToSell: medDays,
-      daysOfSupply: showRate && salesPer30d && salesPer30d > 0 ? r2(fresh.length / (salesPer30d / 30)) : null,
+      daysOfSupply, daysOfSupplyWorst, competingListings: competing, sellChance7d,
+      components: components.sort((a, b) => b.weight - a.weight),
     };
   }
 

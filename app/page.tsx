@@ -281,7 +281,7 @@ function Ranking({ products, onOpen }: { products: ProductStats[]; onOpen: (id: 
         <thead className="text-[11px] uppercase tracking-wide text-slate-500">
           <tr>
             <th className="px-3 py-2 font-normal">#</th><th className="font-normal">Produto</th><th className="font-normal">Giro</th>
-            <th className="hidden font-normal sm:table-cell">Vendas/30d</th><th className="hidden font-normal sm:table-cell">Dias estoque</th>
+            <th className="hidden font-normal sm:table-cell">Vende em 7d</th><th className="hidden font-normal sm:table-cell">Dias estoque</th>
             <th className="font-normal">Até</th><th className="pr-3 font-normal">Lucro</th>
           </tr>
         </thead>
@@ -295,7 +295,7 @@ function Ranking({ products, onOpen }: { products: ProductStats[]; onOpen: (id: 
                   {p.liquidity.basis === "estimada" ? "~" : ""}{p.liquidity.score ?? "—"}
                 </span>
               </td>
-              <td className="hidden sm:table-cell">{p.liquidity.salesPer30d ?? "—"}</td>
+              <td className="hidden sm:table-cell">{p.liquidity.sellChance7d !== null ? `${p.liquidity.sellChance7d}%` : "—"}</td>
               <td className="hidden sm:table-cell">{p.liquidity.daysOfSupply ?? "—"}</td>
               <td className="font-semibold text-white">{chf(p.pricing.recommended?.maxBuy)}</td>
               <td className="pr-3 text-emerald-300">{chf(p.pricing.recommended?.profitAtMaxBuy)}</td>
@@ -304,8 +304,8 @@ function Ranking({ products, onOpen }: { products: ProductStats[]; onOpen: (id: 
         </tbody>
       </table>
       <p className="px-3 py-2 text-xs text-slate-500">
-        ~ = giro estimado pelos leilões ativos (ainda sem vendas confirmadas). Toque num produto para ver os detalhes.
-        Dias de estoque = anúncios ativos ÷ vendas por dia: abaixo de ~10 o mercado absorve rápido; acima de 30 há excesso de oferta.
+        ~ = giro estimado sobretudo pelos leilões ativos (poucas vendas ainda). Toque num produto e veja "Por que este giro?".
+        Dias de estoque = anúncios ao preço de mercado ÷ vendas por dia: abaixo de ~10 o mercado absorve rápido; acima de 30 há excesso de oferta.
       </p>
     </section>
   );
@@ -357,6 +357,41 @@ function ProductCard({ p, open, onToggle }: { p: ProductStats; open: boolean; on
 
       {open && <Details p={p} />}
     </article>
+  );
+}
+
+function LiquidityBox({ p }: { p: ProductStats }) {
+  const l = p.liquidity;
+  if (!l.components.length) return null;
+  const total = 0.15 + l.components.reduce((a, c) => a + c.weight, 0);
+  return (
+    <div className="rounded-xl bg-black/20 p-3 ring-1 ring-white/5">
+      <div className="mb-2 text-xs text-slate-400">Por que este giro? (nota {l.score})</div>
+      {(l.daysOfSupply !== null || l.sellChance7d !== null) && (
+        <div className="mb-2 grid grid-cols-3 gap-2">
+          <Stat label="Vende em 7 dias" value={l.sellChance7d !== null ? `${l.sellChance7d}%` : "—"} sub="chance de 1 anúncio" />
+          <Stat label="Dias de estoque" value={l.daysOfSupply !== null ? String(Math.round(l.daysOfSupply)) : "—"} sub={l.daysOfSupplyWorst !== null ? `pior caso ${Math.round(l.daysOfSupplyWorst)}` : undefined} />
+          <Stat label="Concorrência" value={String(l.competingListings)} sub="ao preço de mercado" />
+        </div>
+      )}
+      <ul className="space-y-1.5">
+        {l.components.map((c) => (
+          <li key={c.key}>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-200">{c.label}</span>
+              <span className="tabular text-slate-400">{c.value}/100 · peso {Math.round((c.weight / total) * 100)}%</span>
+            </div>
+            <div className="mt-0.5 h-1.5 rounded bg-white/5">
+              <div className={`h-1.5 rounded ${c.value >= 60 ? "bg-emerald-400" : c.value >= 40 ? "bg-amber-400" : "bg-rose-400"}`} style={{ width: `${c.value}%` }} />
+            </div>
+            <div className="text-[11px] text-slate-500">{c.detail}</div>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11px] text-slate-500">
+        Cada sinal pesa conforme as provas que tem. O resto ({Math.round((0.15 / total) * 100)}%) é um "neutro" de 50 que evita conclusões com poucos dados.
+      </p>
+    </div>
   );
 }
 
@@ -426,12 +461,12 @@ function Details({ p }: { p: ProductStats }) {
         </div>
       </div>
 
+      <LiquidityBox p={p} />
+
       <div className="rounded-xl bg-black/20 p-3 ring-1 ring-white/5">
         <div className="mb-1 text-xs text-slate-400">Para revender</div>
         <p className="text-slate-200">{p.sell.note}</p>
-        {p.liquidity.daysOfSupply !== null && (
-          <p className="mt-1 text-xs text-slate-400">Dias de estoque no mercado: <b className="text-slate-200">{p.liquidity.daysOfSupply}</b> ({p.counts.active} anúncios ativos)</p>
-        )}
+
         {p.sell.bestEndSlots.length > 0 && (
           <p className="mt-1 text-xs text-slate-400">
             Leilões que acabam em <b className="text-emerald-300">{p.sell.bestEndSlots[0].slot}</b> fecham mais alto (mediana {chf(p.sell.bestEndSlots[0].median)}).

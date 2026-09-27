@@ -345,6 +345,31 @@ async function main() {
     assert.match(formatAlert(byId['offer'], st).title, /ofereça CHF/);
   });
 
+  await test('liquidez: poucos anúncios + vendas conta como giro (oferta vs. vendas)', () => {
+    const { computeProductStats: cps } = require('../lib/stats') as typeof import('../lib/stats');
+    const t0 = new Date('2026-09-27T17:00:00Z');
+    const mk = (id: string, o: Partial<import('../lib/types').ListingRecord>): import('../lib/types').ListingRecord => ({
+      id, productId: 'iphone-13', title: `iPhone 13 ${id}`, url: `https://www.ricardo.ch/de/a/x-${id}/`, mode: 'buynow',
+      bidPrice: null, buyNowPrice: null, bids: 0, endDate: '2026-10-05T10:00:00Z', condition: null, relevant: true,
+      firstSeen: '2026-09-25T10:00:00Z', lastSeen: t0.toISOString(), seenCount: 3, history: [], status: 'active',
+      finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null, ...o,
+    });
+    const runs = [{ at: '2026-09-24T17:00:00Z', found: 60, relevant: 40, complete: true }, { at: t0.toISOString(), found: 60, relevant: 40, complete: true }];
+    const sales = [350, 355, 360].map((v, i) => mk(`s${i}`, { mode: 'auction', status: 'sold', finalPrice: v, soldEvidence: 'inferred', closedAt: `2026-09-2${5 + i}T19:00:00Z`, bids: 9 }));
+    const few = cps(iphone, [...sales, mk('a', { buyNowPrice: 370 }), mk('b', { buyNowPrice: 380 })], runs, t0, 30);
+    const many = cps(iphone, [...sales, ...Array.from({ length: 30 }, (_, i) => mk(`m${i}`, { buyNowPrice: 370 }))], runs, t0, 30);
+    assert.ok(few.liquidity.daysOfSupply! < many.liquidity.daysOfSupply!, 'menos oferta → menos dias de estoque');
+    assert.ok(few.liquidity.score! > many.liquidity.score!, `poucos anúncios ${few.liquidity.score} > muitos ${many.liquidity.score}`);
+    assert.ok(few.liquidity.daysOfSupplyWorst! > few.liquidity.daysOfSupply!, 'pior caso é mais prudente');
+    // Sofort muito caro não conta como concorrência.
+    const pricey = cps(iphone, [...sales, mk('a', { buyNowPrice: 370 }), ...Array.from({ length: 10 }, (_, i) => mk(`p${i}`, { buyNowPrice: 900 }))], runs, t0, 30);
+    assert.equal(pricey.liquidity.competingListings, 1);
+    // 1 venda vale menos que 3.
+    const one = cps(iphone, [sales[0], mk('a', { buyNowPrice: 370 }), mk('b', { buyNowPrice: 380 })], runs, t0, 30);
+    assert.ok(one.liquidity.score! < few.liquidity.score!);
+    console.log(`    → 2 anúncios: ${few.liquidity.score} · 30 anúncios: ${many.liquidity.score} · 1 venda só: ${one.liquidity.score}`);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${process.exitCode ? '❌ Falhas encontradas' : `✅ ${passed} testes OK`}\n`);
 }
