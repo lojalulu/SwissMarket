@@ -29,6 +29,12 @@ export interface ProductConfig {
   extraSearchTerms?: string[];
   mustInclude: string[][];
   exclude?: string[];
+  /**
+   * Acessórios/peças: se o título tiver um destes termos E nenhum de `mainItemTerms`, é acessório.
+   * Ex.: "manette ps5" ✘ · "PlayStation 5 HD Kamera mit Kabel" ✘ · "PS5 Konsole inkl. 2 Controller" ✔
+   */
+  accessoryTerms?: string[];
+  mainItemTerms?: string[];
   priceFloor: number;
   priceCeil: number;
   /** Comissão Ricardo (0.10 = 10 %). */
@@ -56,6 +62,24 @@ export const DEFAULT_EXCLUDE = [
   'imitat', 'nur box', 'nur ovp', 'leere', 'leer ovp', 'suche', 'gesucht', 'tausche',
   'display schaden', 'wasserschaden', 'für teile', 'pour pieces', 'pezzi di ricambio',
 ];
+
+// Termos em DE/FR/IT/EN (o Ricardo é multilíngue).
+const CONSOLE_ACCESSORIES = [
+  'controller', 'manette', 'dualsense', 'dual sense', 'gamepad', 'joy con', 'joycon', 'pro controller',
+  'kamera', 'camera', 'cam', 'headset', 'casque', 'cuffie', 'kopfhorer', 'pulse',
+  'ladestation', 'ladegerat', 'charging', 'charge', 'dock', 'station', 'stand', 'stander', 'halterung', 'support',
+  'skin', 'sticker', 'cover', 'faceplate', 'hulle', 'huelle', 'case', 'coque', 'etui', 'tasche', 'sacoche', 'borsa',
+  'kabel', 'cable', 'cavo', 'hdmi', 'netzteil', 'alimentation', 'lufter', 'kuhler', 'cooling', 'ventilateur',
+  'remote', 'fernbedienung', 'telecommande', 'lenkrad', 'volant', 'wheel', 'vr', 'portal', 'laufwerk', 'lecteur',
+  'ssd', 'festplatte', 'speicherkarte', 'microsd', 'amiibo', 'grip', 'thumb', 'aufsatz', 'kappen',
+];
+const CONSOLE_MAIN = ['konsole', 'console', 'consola', 'konsol', 'bundle', 'set', 'paket', 'inkl', 'inklusive', 'including', 'incl', 'avec', 'con', 'komplett', 'complete', 'slim', 'edition'];
+const DYSON_PARTS = [
+  'brush', 'burste', 'buerste', 'brosse', 'spazzola', 'aufsatz', 'embout', 'accessoire', 'zubehor', 'attachment',
+  'duse', 'nozzle', 'diffuser', 'diffusor', 'barrel', 'curler', 'lockenwickler', 'filter', 'kabel', 'cable',
+  'halter', 'halterung', 'stander', 'stand', 'etui', 'case', 'tasche', 'box', 'ersatz', 'ersatzteil',
+];
+const DYSON_MAIN = ['komplett', 'complete', 'multistyler', 'styler', 'haarstyler', 'set', 'gerat', 'geraet', 'inkl', 'inklusive', 'avec', 'mit allen', 'origin', 'id'];
 
 const IPHONE_EXCLUDE = ['pro', 'max', 'mini', 'plus', 'hulle', 'huelle', 'case', 'cover', 'panzerglas', 'schutzglas', 'folie', 'ladekabel'];
 const MACBOOK_EXCLUDE = ['pro', 'm1 pro', 'm1 max', 'ipad', 'hulle', 'case', 'sleeve', 'tasche', 'netzteil', 'ladegerat', 'tastatur', 'keyboard', 'akku', 'battery'];
@@ -157,7 +181,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     id: 'sony-wh1000xm5', name: 'Sony WH-1000XM5', category: 'electronics',
     searchTerm: 'sony wh-1000xm5',
     mustInclude: [['sony'], ['xm 5']],
-    exclude: ['xm 4', 'xm 6', 'ohrpolster', 'polster', 'etui', 'case', 'kabel', 'ear pads'],
+    exclude: ['xm 4', 'xm 6', 'ohrpolster', 'polster', 'etui', 'case', 'kabel', 'ear pads', 'wf', 'in ear', 'inear', 'earbuds', 'ohrstopsel', 'buds'],
     priceFloor: 100, priceCeil: 380, feeRate: 0.12,
   },
   {
@@ -173,6 +197,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     mustInclude: [['dyson'], ['airwrap']],
     exclude: ['aufsatz', 'aufsatze', 'duse', 'buerste', 'burste', 'nur', 'halter', 'stander', 'etui', 'ersatz', 'kabel'],
     priceFloor: 200, priceCeil: 700, feeRate: 0.12,
+    accessoryTerms: DYSON_PARTS, mainItemTerms: DYSON_MAIN,
   },
 
   // ─────────────── Consolas ───────────────
@@ -182,6 +207,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     mustInclude: [['switch 2', 'switch2']],
     exclude: ['oled', 'lite', 'hulle', 'huelle', 'case', 'tasche', 'schutzfolie', 'dock only', 'nur dock', 'nur joy con', 'joy con only', 'grip', 'game key card', 'pro controller', 'nur controller', 'amiibo', 'edition card', 'directors cut', 'ladestation', 'kamera', 'camera', 'headset'],
     priceFloor: 250, priceCeil: 650, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
   },
   {
     id: 'ps5-pro', name: 'PlayStation 5 Pro', category: 'gaming',
@@ -190,6 +216,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     mustInclude: [['playstation 5', 'ps 5', 'ps5', 'playstation5'], ['pro']],
     exclude: ['controller', 'dualsense', 'portal', 'vr', 'cover', 'faceplate', 'ladestation', 'headset', 'laufwerk only', 'nur laufwerk'],
     priceFloor: 450, priceCeil: 950, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
   },
   {
     id: 'ps5', name: 'PlayStation 5 (Disc)', category: 'gaming',
@@ -198,6 +225,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     mustInclude: [['playstation 5', 'ps 5', 'ps5', 'playstation5']],
     exclude: ['digital', 'controller only', 'nur controller', 'cover', 'faceplate', 'ladestation', 'headset', 'pro', 'portal', 'vr', 'dualsense edge'],
     priceFloor: 200, priceCeil: 650, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
   },
   {
     id: 'switch-oled', name: 'Nintendo Switch OLED', category: 'gaming',
@@ -205,6 +233,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     mustInclude: [['switch'], ['oled']],
     exclude: ['hulle', 'huelle', 'case', 'tasche', 'schutzfolie', 'dock only', 'nur dock', 'lite', 'switch 2', 'joy con only', 'nur joy con', 'pro controller', 'amiibo'],
     priceFloor: 150, priceCeil: 450, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
   },
   {
     id: 'steam-deck', name: 'Steam Deck', category: 'gaming',
@@ -212,6 +241,7 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     mustInclude: [['steam deck', 'steamdeck']],
     exclude: ['hulle', 'huelle', 'case', 'tasche', 'dock only', 'nur dock', 'folie', 'skin', 'grip'],
     priceFloor: 200, priceCeil: 750, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
   },
 
   // ─────────────── Drones ───────────────

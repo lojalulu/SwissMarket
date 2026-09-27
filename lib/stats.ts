@@ -132,6 +132,13 @@ export interface ProductStats {
   active: { askingBuyNow: Dist; auctionBids: Dist; auctionsWithBidsPct: number | null; avgBids: number | null; auctions: number };
   /** "Sofort kaufen" que desapareceram antes do fim com o inventário completo à vista (vendas prováveis). */
   probableBuyNow: Dist;
+  /** Leilões a CHF 1–5 vs com preço base: quantos vendem e por quanto (preço inicial = 1º lance visto com 0 lances). */
+  auctionStrategy: {
+    lowStart: { n: number; soldPct: number | null; medianFinal: number | null };
+    highStart: { n: number; soldPct: number | null; medianFinal: number | null };
+    activeLowStartPct: number | null;
+    activeKnown: number;
+  };
   sold: Dist;
   liquidity: {
     label: LiquidityLabel;
@@ -356,6 +363,29 @@ export function computeProductStats(
     opportunities.sort((a, b) => b.score - a.score || b.estProfit - a.estProfit);
   }
 
+  // ── estratégia de leilão: começar a CHF 1 ou com preço base?
+  const startPriceOf = (r: ListingRecord): number | null => {
+    const first = r.history.find((h) => h.bids === 0 && h.bid !== null);
+    return first ? first.bid : null;
+  };
+  const closedAuctions = closedInWindow.filter((r) => r.mode !== 'buynow' && (r.status === 'sold' || r.status === 'ended_unsold'));
+  const group = (low: boolean) => {
+    const g = closedAuctions.filter((r) => { const sp = startPriceOf(r); return sp !== null && (low ? sp <= 5 : sp > 5); });
+    const soldG = g.filter((r) => r.status === 'sold' && inBand(r.finalPrice));
+    return {
+      n: g.length,
+      soldPct: g.length ? Math.round((g.filter((r) => r.status === 'sold').length / g.length) * 100) : null,
+      medianFinal: dist(soldG.map((r) => r.finalPrice!)).median,
+    };
+  };
+  const activeKnownStarts = auctions.map(startPriceOf).filter((v): v is number => v !== null);
+  const auctionStrategy = {
+    lowStart: group(true),
+    highStart: group(false),
+    activeLowStartPct: activeKnownStarts.length >= 3 ? Math.round((activeKnownStarts.filter((v) => v <= 5).length / activeKnownStarts.length) * 100) : null,
+    activeKnown: activeKnownStarts.length,
+  };
+
   // ── sugestões para revender
   const soldPrices = sold.map((r) => r.finalPrice!).sort((a, b) => a - b);
   const sellBuyNow = soldPrices.length >= 5 ? Math.round(quantile(soldPrices, 0.65))
@@ -406,6 +436,7 @@ export function computeProductStats(
     },
     active: { askingBuyNow: dist(asking), auctionBids: dist(hotBids), auctionsWithBidsPct, avgBids, auctions: auctions.length },
     probableBuyNow: dist(probable.map((r) => r.buyNowPrice).filter(inBand) as number[]),
+    auctionStrategy,
     sold: soldDist,
     liquidity,
     sell: { buyNowPrice: sellBuyNow, note: sellNote, bestEndSlots },

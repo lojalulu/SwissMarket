@@ -439,6 +439,24 @@ function Details({ p }: { p: ProductStats }) {
         )}
       </div>
 
+      <div className="rounded-xl bg-black/20 p-3 ring-1 ring-white/5">
+        <div className="mb-1 flex items-center gap-1 text-xs text-slate-400"><Gavel className="h-3.5 w-3.5" /> Estratégia de leilão (dados reais)</div>
+        {p.auctionStrategy.lowStart.n + p.auctionStrategy.highStart.n === 0 ? (
+          <p className="text-slate-400">Ainda sem leilões terminados com preço inicial conhecido.</p>
+        ) : (
+          <table className="tabular w-full text-left text-slate-200">
+            <thead className="text-[11px] uppercase text-slate-500"><tr><th className="font-normal">Começou em</th><th className="font-normal">n</th><th className="font-normal">Vendeu</th><th className="font-normal">Mediana final</th></tr></thead>
+            <tbody>
+              <tr className="border-t border-white/5"><td className="py-1">CHF 1–5</td><td>{p.auctionStrategy.lowStart.n}</td><td>{p.auctionStrategy.lowStart.soldPct ?? "—"}%</td><td>{chf(p.auctionStrategy.lowStart.medianFinal)}</td></tr>
+              <tr className="border-t border-white/5"><td className="py-1">Preço base (&gt; 5)</td><td>{p.auctionStrategy.highStart.n}</td><td>{p.auctionStrategy.highStart.soldPct ?? "—"}%</td><td>{chf(p.auctionStrategy.highStart.medianFinal)}</td></tr>
+            </tbody>
+          </table>
+        )}
+        {p.auctionStrategy.activeLowStartPct !== null && (
+          <p className="mt-1 text-xs text-slate-400">Leilões ativos agora: {p.auctionStrategy.activeLowStartPct}% começaram a CHF 1–5 ({p.auctionStrategy.activeKnown} com início conhecido).</p>
+        )}
+      </div>
+
       {p.weekly.length > 1 && (
         <div className="h-40">
           <div className="mb-1 text-xs text-slate-400">Mediana vendida por semana</div>

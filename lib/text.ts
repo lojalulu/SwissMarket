@@ -25,6 +25,23 @@ function hasTerm(haystack: string, term: string): boolean {
   return (' ' + haystack + ' ').includes(' ' + t + ' ');
 }
 
+// Palavras que indicam "vem junto": "PS5 mit Controller" = consola COM comando (não é só o comando).
+const CONNECTORS = new Set(['mit', 'inkl', 'und', 'plus', 'avec', 'et', 'with', 'and', 'con', 'e', 'samt', 'sowie', '2', '3', '4', 'zwei', 'drei', 'deux', 'two']);
+
+/** O termo aparece como objeto principal (não precedido de "mit", "inkl.", "+"…)? */
+function standaloneTerm(haystack: string, term: string): boolean {
+  const t = normalize(term);
+  if (!t) return false;
+  const words = haystack.split(' ');
+  const tw = t.split(' ');
+  for (let i = 0; i + tw.length <= words.length; i++) {
+    if (tw.every((w, j) => words[i + j] === w)) {
+      if (i === 0 || !CONNECTORS.has(words[i - 1])) return true;
+    }
+  }
+  return false;
+}
+
 export interface RelevanceResult {
   relevant: boolean;
   reason?: string;
@@ -44,6 +61,10 @@ export function checkRelevance(title: string, url: string, product: ProductConfi
   }
   for (const term of [...DEFAULT_EXCLUDE, ...(product.exclude ?? [])]) {
     if (hasTerm(hay, term)) return { relevant: false, reason: `excluído: ${term}` };
+  }
+  if (product.accessoryTerms?.length && !(product.mainItemTerms ?? []).some((t) => hasTerm(hay, t))) {
+    const acc = product.accessoryTerms.find((t) => standaloneTerm(hay, t));
+    if (acc) return { relevant: false, reason: `acessório: ${acc}` };
   }
   return { relevant: true };
 }

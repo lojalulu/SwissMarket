@@ -151,6 +151,18 @@ async function main() {
     ];
     for (const [id, t, exp] of cases) assert.equal(checkRelevance(t, '', g(id)).relevant, exp, `${id}: ${t}`);
   });
+  await test('acessórios vs. produto (PS5, Dyson, Sony, Switch 2) — "mit Controller" é bundle', () => {
+    const T: [string,string,boolean][] = [
+     ['ps5','manette ps5',false],['ps5','PlayStation 5 HD Kamera mit Kabel gebrauchter Zustand',false],['ps5','Sony PlayStation 5 Disc Edition',true],
+     ['ps5','PS5 Konsole inkl. 2 Controller',true],['ps5','Playstation 5 mit Controller',true],['ps5','PS5 Kamera mit Kabel',false],['ps5','Sony Playstation 5 825GB',true],
+     ['ps5','PS5 Controller Ladestation',false],['ps5','Playstation 5 Slim + 2 Spiele',true],
+     ['dyson-airwrap','Neuwertig! Dyson Airwrap™ Small Firm Smoothing Brush',false],['dyson-airwrap','Dyson Airwrap Complete Long',true],
+     ['dyson-airwrap','Dyson Airwrap Multistyler mit allen Aufsätzen',true],['dyson-airwrap','Dyson Airwrap',true],
+     ['sony-wh1000xm5','Sony WF-1000XM5 in ear',false],['sony-wh1000xm5','Sony WH-1000XM5 schwarz',true],
+     ['switch-2','Nintendo Switch 2 Pro Controller',false],['switch-2','Nintendo Switch 2 Konsole',true],['switch-2','Nintendo Switch 2',true],
+    ];
+    for (const [id, t, e] of T) assert.equal(checkRelevance(t, '', getProduct(id)!).relevant, e, t);
+  });
   await test('normalização e parse de CHF', () => {
     assert.equal(normalize('iPhone13 128GB – Grün'), 'iphone 13 128 gb grun');
     assert.equal(parseChf("1'250.00"), 1250);

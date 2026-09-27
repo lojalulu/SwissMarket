@@ -115,6 +115,9 @@ export function effectiveRecords(productId: string): ListingRecord[] {
   const cats = acceptedCategories(p, recs);
   return recs.map((r) => {
     if (!r.relevant) return r;
+    // Regras de título atuais aplicadas também a registos antigos (ex.: novos termos de acessórios).
+    const t = checkRelevance(r.title, r.url, p);
+    if (!t.relevant) return { ...r, relevant: false, titleOk: false, rejectReason: t.reason };
     if (cats && r.categoryId && !cats.has(r.categoryId)) return { ...r, relevant: false, rejectReason: `outra categoria (${r.categoryId})` };
     if (badCondition(r.condition)) return { ...r, relevant: false, rejectReason: `estado: ${r.condition}` };
     return r;
