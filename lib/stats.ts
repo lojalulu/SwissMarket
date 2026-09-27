@@ -292,7 +292,9 @@ export function computeProductStats(
     liquidity = { label: 'sem_dados', score: null, basis: 'sem_dados', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null, daysOfSupply: null };
   } else {
     const w = salesScore === null ? 0 : demandScore === null ? 1 : Math.min(1, evidence / 8);
-    const score = Math.round(w * (salesScore ?? 0) + (1 - w) * (demandScore ?? 0));
+    // Só vendas e poucas (ex.: 2) → puxa a nota para 50 (neutro) até haver ≥ 5 fechos.
+    const salesAdj = salesScore !== null && demandScore === null ? 50 + (salesScore - 50) * Math.min(1, evidence / 5) : salesScore;
+    const score = Math.round(w * (salesAdj ?? 0) + (1 - w) * (demandScore ?? 0));
     // Vendas por mês extrapoladas de < 3 dias são ruidosas → só mostramos a partir de 3 dias.
     const showRate = daysTracked >= 3;
     liquidity = {
@@ -319,6 +321,13 @@ export function computeProductStats(
     confidence = mix.n >= 6 ? 'media' : 'baixa';
     median = mix.median;
     quick = mix.p25 !== null && mix.median !== null ? (mix.p25 + mix.median) / 2 : mix.median;
+  } else if (soldDist.n >= 1) {
+    // 1–2 vendas reais: junta-as aos preços pedidos (−10 %). Melhor que ignorar vendas reais.
+    const pool = dist([...sold.map((r) => r.finalPrice!), ...asking.map((v) => v * 0.9)]);
+    basis = 'misto';
+    confidence = 'baixa';
+    median = pool.median;
+    quick = pool.n === 1 ? r2(pool.median! * 0.95) : (pool.p25! + pool.median!) / 2;
   } else {
     const ask = dist(asking);
     if (ask.n >= 3) {
