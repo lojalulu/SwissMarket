@@ -160,6 +160,20 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     exclude: [...MACBOOK_EXCLUDE, 'm 1', 'm 3', 'm 4', '15'],
     priceFloor: 400, priceCeil: 1400, feeRate: 0.12,
   },
+  {
+    id: 'macbook-air-m3', name: 'MacBook Air M3 13"', category: 'electronics',
+    searchTerm: 'macbook air m3',
+    mustInclude: [['macbook'], ['air'], ['m 3', 'm3']],
+    exclude: [...MACBOOK_EXCLUDE, 'm 1', 'm 2', 'm 4', '15'],
+    priceFloor: 450, priceCeil: 1400, feeRate: 0.12,
+  },
+  {
+    id: 'macbook-air-m4', name: 'MacBook Air M4 13"', category: 'electronics',
+    searchTerm: 'macbook air m4',
+    mustInclude: [['macbook'], ['air'], ['m 4', 'm4']],
+    exclude: [...MACBOOK_EXCLUDE, 'm 1', 'm 2', 'm 3', '15'],
+    priceFloor: 550, priceCeil: 1600, feeRate: 0.12,
+  },
 
   // ─────────────── Áudio ───────────────
   {
