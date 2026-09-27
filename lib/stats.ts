@@ -256,28 +256,50 @@ export function computeProductStats(
   const runs24h = runs.filter((r) => new Date(r.at).getTime() >= nowMs - DAY).length;
 
   // ── liquidez
+  // Duas fontes, misturadas conforme a quantidade de provas:
+  //   • "procura" (desde o 1º dia): % de leilões ativos com lances + média de lances
+  //   • "vendas reais": vendas/mês, % que vende, dias até vender
+  // Peso das vendas = nº de fechos ÷ 8 (com 8+ fechos, só as vendas contam). Antes, as vendas só
+  // entravam depois de 3 dias → produtos sem nenhuma venda podiam ficar à frente de quem já vendeu.
   const effDays = Math.min(windowDays, Math.max(daysTracked, 1));
   const salesCount = sold.length + 0.5 * probable.length;
   const closedCount = sold.length + endedUnsold.length;
-  let liquidity: ProductStats['liquidity'];
-  if (daysTracked >= 3 && closedCount + probable.length >= 3) {
-    const salesPer30d = r2((salesCount / effDays) * 30);
-    const sellThrough = closedCount ? Math.round((sold.length / closedCount) * 100) : null;
+  const evidence = closedCount + probable.length;
+  const label = (sc: number): LiquidityLabel => (sc >= 65 ? 'rapido' : sc >= 40 ? 'medio' : 'lento');
+
+  const demandScore = auctionsWithBidsPct !== null && avgBids !== null && auctions.length >= 5
+    ? Math.round(50 + (auctionsWithBidsPct * 0.5 + Math.min(avgBids, 10) * 5 - 50) * Math.min(1, auctions.length / 15))
+    : null;
+
+  let salesScore: number | null = null;
+  let salesPer30d: number | null = null;
+  let sellThrough: number | null = null;
+  let medDays: number | null = null;
+  if (evidence >= 1) {
+    salesPer30d = r2((salesCount / effDays) * 30);
+    sellThrough = closedCount ? Math.round((sold.length / closedCount) * 100) : null;
     const daysToSell = sold.map((r) => (new Date(r.closedAt!).getTime() - new Date(r.startDate ?? r.firstSeen).getTime()) / DAY).filter((d) => d >= 0).sort((a, b) => a - b);
-    const medDays = daysToSell.length ? Math.round(quantile(daysToSell, 0.5) * 10) / 10 : null;
-    const score = Math.round(
+    medDays = daysToSell.length ? Math.round(quantile(daysToSell, 0.5) * 10) / 10 : null;
+    salesScore = Math.round(
       Math.min(salesPer30d * 2.5, 50) +
       (sellThrough ?? 50) * 0.3 +
       (medDays === null ? 8 : medDays <= 3 ? 20 : medDays <= 7 ? 12 : medDays <= 14 ? 6 : 0),
     );
-    liquidity = { label: score >= 65 ? 'rapido' : score >= 40 ? 'medio' : 'lento', score, basis: 'vendas', salesPer30d, sellThroughPct: sellThrough, medianDaysToSell: medDays, daysOfSupply: salesPer30d > 0 ? r2(fresh.length / (salesPer30d / 30)) : null };
-  } else if (auctionsWithBidsPct !== null && avgBids !== null && auctions.length >= 5) {
-    // Estimativa pelos leilões ativos, "encolhida" para 50 quando há poucos leilões (evita 90 com 3 anúncios).
-    const raw = auctionsWithBidsPct * 0.5 + Math.min(avgBids, 10) * 5;
-    const score = Math.round(50 + (raw - 50) * Math.min(1, auctions.length / 15));
-    liquidity = { label: score >= 65 ? 'rapido' : score >= 40 ? 'medio' : 'lento', score, basis: 'estimada', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null, daysOfSupply: null };
-  } else {
+  }
+
+  let liquidity: ProductStats['liquidity'];
+  if (salesScore === null && demandScore === null) {
     liquidity = { label: 'sem_dados', score: null, basis: 'sem_dados', salesPer30d: null, sellThroughPct: null, medianDaysToSell: null, daysOfSupply: null };
+  } else {
+    const w = salesScore === null ? 0 : demandScore === null ? 1 : Math.min(1, evidence / 8);
+    const score = Math.round(w * (salesScore ?? 0) + (1 - w) * (demandScore ?? 0));
+    // Vendas por mês extrapoladas de < 3 dias são ruidosas → só mostramos a partir de 3 dias.
+    const showRate = daysTracked >= 3;
+    liquidity = {
+      label: label(score), score, basis: w >= 0.5 ? 'vendas' : 'estimada',
+      salesPer30d: showRate ? salesPer30d : null, sellThroughPct: sellThrough, medianDaysToSell: medDays,
+      daysOfSupply: showRate && salesPer30d && salesPer30d > 0 ? r2(fresh.length / (salesPer30d / 30)) : null,
+    };
   }
 
   // ── preço de revenda de referência

@@ -77,7 +77,8 @@ export default function Page() {
     const list = [...(data?.products ?? [])];
     if (sort === "nome") list.sort((a, b) => a.name.localeCompare(b.name));
     else if (sort === "lucro") list.sort((a, b) => (b.pricing.recommended?.profitAtMaxBuy ?? -1) - (a.pricing.recommended?.profitAtMaxBuy ?? -1));
-    else list.sort((a, b) => (b.liquidity.score ?? -1) - (a.liquidity.score ?? -1));
+    // Mais líquidos: nota de giro; empate → quem tem mais vendas registadas.
+    else list.sort((a, b) => (b.liquidity.score ?? -1) - (a.liquidity.score ?? -1) || b.sold.n - a.sold.n);
     return list;
   }, [data, sort]);
 
@@ -335,7 +336,7 @@ function ProductCard({ p, open, onToggle }: { p: ProductStats; open: boolean; on
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className={`rounded-full px-2 py-0.5 text-xs ring-1 ${liq.cls}`}>
-              {liq.text}{p.liquidity.score !== null ? ` · ${p.liquidity.score}` : ""}
+              {liq.text}{p.liquidity.score !== null ? ` · ${p.liquidity.basis === "estimada" ? "~" : ""}${p.liquidity.score}` : ""}
             </span>
             <ChevronDown className={`h-4 w-4 text-slate-400 transition ${open ? "rotate-180" : ""}`} />
           </div>
