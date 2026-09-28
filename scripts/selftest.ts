@@ -414,6 +414,37 @@ async function main() {
     console.log(`    → tendência ${st.trend!.pctPerWeek}%/sem, desconto ${st.trend!.appliedCHF} CHF, potencial ${st.potential!.expectedProfit7d}/sem`);
   });
 
+  await test('malas: carteira/cinto/porta-cartões não contam como a mala (Gucci Marmont Geldtasche)', () => {
+    const g = getProduct('gucci-marmont')!;
+    for (const t of ['Gucci Marmont Geldtasche', 'Gucci GG Marmont Portemonnaie', 'Gucci Marmont Kartenhalter schwarz', 'GUCCI Marmont Gürtel 85', 'Gucci Marmont card holder'])
+      assert.equal(checkRelevance(t, '', g).relevant, false, t);
+    for (const t of ['Gucci GG Marmont Tasche schwarz mit Kette', 'Gucci Marmont small shoulder bag', 'Gucci Marmont Mini Bag rosa'])
+      assert.equal(checkRelevance(t, '', g).relevant, true, t);
+    assert.equal(checkRelevance('Louis Vuitton Speedy Schlüsselanhänger', '', getProduct('lv-speedy')!).relevant, false);
+  });
+  await test('leilão que saiu da 1ª página dias antes do fim NÃO conta como venda ao lance antigo', () => {
+    const t = new Date('2026-09-28T12:00:00Z');
+    const mk = (id: string, lastSeen: string, bid: number): import('../lib/types').ListingRecord => ({
+      id, productId: 'iphone-13', title: `iPhone 13 ${id}`, url: `https://www.ricardo.ch/de/a/x-${id}/`, mode: 'auction',
+      bidPrice: bid, buyNowPrice: null, bids: 6, endDate: '2026-09-24T19:00:00Z', condition: null, relevant: true,
+      firstSeen: '2026-09-20T10:00:00Z', lastSeen, seenCount: 3, history: [], status: 'active',
+      finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null,
+    });
+    const db = store.withDb((d) => d, false);
+    db.listings['iphone-13:1399000001'] = mk('1399000001', '2026-09-21T10:00:00Z', 80);  // visto 3 dias antes do fim
+    db.listings['iphone-13:1399000002'] = mk('1399000002', '2026-09-24T18:56:00Z', 290); // visto 4 min antes do fim
+    store.maintain(t);
+    const recs = store.effectiveRecords('iphone-13');
+    const early = recs.find((r) => r.id === '1399000001')!, late = recs.find((r) => r.id === '1399000002')!;
+    assert.equal(early.status, 'gone');
+    assert.equal(early.finalPrice, null);
+    assert.equal(late.status, 'sold');
+    assert.equal(late.finalPrice, 290);
+    // registo antigo já fechado como "vendido" pela regra velha → corrigido na leitura
+    db.listings['iphone-13:1399000003'] = { ...mk('1399000003', '2026-09-21T10:00:00Z', 70), status: 'sold', finalPrice: 70, soldVia: 'auction', soldEvidence: 'inferred', closedAt: '2026-09-24T19:00:00Z' };
+    assert.equal(store.effectiveRecords('iphone-13').find((r) => r.id === '1399000003')!.status, 'gone');
+  });
+
   console.log('\nTutti / Anibis (lado da compra)');
   const { parseClassifiedSearch, parseClassifiedDetail, sellerTrust, parsePosted } = await import('../lib/classifieds');
   const geo = await import('../lib/geo');

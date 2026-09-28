@@ -120,6 +120,12 @@ export function acceptedCategories(p: ProductConfig, records: ListingRecord[], e
   return new Set([...counts.entries()].filter(([, n]) => n / total >= 0.15).map(([c]) => c));
 }
 
+/** Visto na pesquisa até 75 min antes do fim (ou depois)? Só então o último lance visto ≈ preço final. */
+function seenNearEnd(r: ListingRecord): boolean {
+  if (!r.endDate) return false;
+  return Date.parse(r.endDate) - Date.parse(r.lastSeen) <= 75 * 60e3;
+}
+
 /** Registos com a relevância recalculada pelas regras atuais (categoria + estado), inclusive os antigos. */
 export function effectiveRecords(productId: string): ListingRecord[] {
   const p = getProduct(productId);
@@ -127,6 +133,11 @@ export function effectiveRecords(productId: string): ListingRecord[] {
   if (!p) return recs;
   const cats = acceptedCategories(p, recs);
   return recs.map((r) => {
+    // Venda "inferida" de leilão que saiu da 1ª página muito antes do fim: o lance visto NÃO é o preço final
+    // (os lances sobem no fim). Registos antigos fechados assim pela regra das 48 h → resultado desconhecido.
+    if (r.status === 'sold' && r.soldEvidence === 'inferred' && r.mode !== 'buynow' && !seenNearEnd(r)) {
+      r = { ...r, status: 'gone', finalPrice: null, soldVia: null, soldEvidence: null };
+    }
     if (!r.relevant) return r;
     // Regras de título atuais aplicadas também a registos antigos (ex.: novos termos de acessórios).
     const t = checkRelevance(r.title, r.url, p);
@@ -364,8 +375,10 @@ function closeStale(db: DB, now: Date) {
       if (r.bids > 0) closeAs(r, iso, 'sold', r.bidPrice, 'auction', 'inferred');
       else closeAs(r, iso, 'ended_unsold', null, null, null);
     } else if (endMs && endMs < nowMs - 48 * HOUR && (r.checkAttempts >= 3 || nowMs - lastSeenMs > 48 * HOUR)) {
-      if (r.mode !== 'buynow' && r.bids > 0) closeAs(r, iso, 'sold', r.bidPrice, 'auction', 'inferred');
-      else closeAs(r, iso, 'ended_unsold', null, null, null);
+      // Terminou há 2+ dias mas não o vimos perto do fim (saiu da 1ª página): não sabemos o preço final nem
+      // se vendeu. Antes era registado como "vendido" ao último lance visto (às vezes dias antes) → preços
+      // de revenda artificialmente baixos. Agora fica "desconhecido" e não entra nas médias.
+      closeAs(r, iso, 'gone', null, null, null);
     } else if (!endMs && nowMs - lastSeenMs > 10 * DAY && (r.missedRuns ?? 0) >= 6) {
       closeAs(r, iso, 'gone', null, null, null);
     }

@@ -63,6 +63,15 @@ export const DEFAULT_EXCLUDE = [
   'display schaden', 'wasserschaden', 'für teile', 'pour pieces', 'pezzi di ricambio',
 ];
 
+// Pequena marroquinaria e acessórios de moda: NÃO são a mala (preço muito diferente). DE/FR/IT/EN.
+const SMALL_LEATHER = [
+  'wallet', 'portemonnaie', 'portmonnaie', 'portemonaie', 'geldbörse', 'geldboerse', 'geldbeutel', 'geldtasche', 'brieftasche',
+  'kartenetui', 'kartenhalter', 'kreditkartenetui', 'card holder', 'cardholder', 'card case', 'porte cartes', 'porte carte',
+  'porte monnaie', 'portefeuille', 'portafoglio', 'portacarte', 'schlüsseletui', 'key pouch', 'key holder', 'keychain',
+  'schlüsselanhänger', 'bag charm', 'taschenanhänger', 'gürtel', 'guertel', 'belt', 'ceinture', 'cintura',
+  'sonnenbrille', 'sunglasses', 'lunettes', 'foulard', 'bandeau', 'twilly', 'schal', 'scarf',
+];
+
 // Termos em DE/FR/IT/EN (o Ricardo é multilíngue).
 const CONSOLE_ACCESSORIES = [
   'controller', 'manette', 'dualsense', 'dual sense', 'gamepad', 'joy con', 'joycon', 'pro controller',
@@ -280,35 +289,35 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     id: 'lv-neverfull', name: 'Louis Vuitton Neverfull', category: 'bag',
     searchTerm: 'louis vuitton neverfull',
     mustInclude: [['louis vuitton', 'lv'], ['neverfull']],
-    exclude: ['pochette only', 'nur pochette', 'organizer', 'insert', 'einsatz', 'staubbeutel', 'dustbag', 'style', 'art', 'look'],
+    exclude: [...SMALL_LEATHER, 'pochette only', 'nur pochette', 'organizer', 'insert', 'einsatz', 'staubbeutel', 'dustbag', 'style', 'art', 'look'],
     priceFloor: 500, priceCeil: 3000, feeRate: 0.12,
   },
   {
     id: 'lv-pochette-metis', name: 'Louis Vuitton Pochette Métis', category: 'bag',
     searchTerm: 'louis vuitton pochette metis',
     mustInclude: [['louis vuitton', 'lv'], ['metis']],
-    exclude: ['organizer', 'insert', 'einsatz', 'staubbeutel', 'dustbag', 'style', 'art', 'look'],
+    exclude: [...SMALL_LEATHER, 'organizer', 'insert', 'einsatz', 'staubbeutel', 'dustbag', 'style', 'art', 'look'],
     priceFloor: 800, priceCeil: 3500, feeRate: 0.12,
   },
   {
     id: 'lv-speedy', name: 'Louis Vuitton Speedy', category: 'bag',
     searchTerm: 'louis vuitton speedy',
     mustInclude: [['louis vuitton', 'lv'], ['speedy']],
-    exclude: ['organizer', 'insert', 'einsatz', 'staubbeutel', 'dustbag', 'style', 'art', 'look', 'nano'],
+    exclude: [...SMALL_LEATHER, 'organizer', 'insert', 'einsatz', 'staubbeutel', 'dustbag', 'style', 'art', 'look', 'nano'],
     priceFloor: 300, priceCeil: 2500, feeRate: 0.12,
   },
   {
     id: 'gucci-marmont', name: 'Gucci GG Marmont', category: 'bag',
     searchTerm: 'gucci marmont',
     mustInclude: [['gucci'], ['marmont']],
-    exclude: ['gurtel', 'guertel', 'belt', 'sonnenbrille', 'wallet', 'portemonnaie', 'kartenetui', 'style', 'art', 'look'],
+    exclude: [...SMALL_LEATHER, 'style', 'art', 'look'],
     priceFloor: 400, priceCeil: 2500, feeRate: 0.12,
   },
   {
     id: 'gucci-dionysus', name: 'Gucci Dionysus', category: 'bag',
     searchTerm: 'gucci dionysus',
     mustInclude: [['gucci'], ['dionysus']],
-    exclude: ['wallet', 'portemonnaie', 'kartenetui', 'style', 'art', 'look'],
+    exclude: [...SMALL_LEATHER, 'style', 'art', 'look'],
     priceFloor: 400, priceCeil: 2500, feeRate: 0.12,
   },
 ];

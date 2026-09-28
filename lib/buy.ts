@@ -239,6 +239,9 @@ export function buyDeals(opts: { productId?: string; includeGone?: boolean; maxA
     if (opts.productId && r.productId !== opts.productId) continue;
     if (r.status === 'gone' && !opts.includeGone) continue;
     if (now.getTime() - Date.parse(r.lastSeen) > maxAge) continue;
+    // Regras de título atuais também para anúncios já guardados (ex.: novos termos excluídos).
+    const prod = getProduct(r.productId);
+    if (!prod || !checkRelevance(r.title, r.url, prod).relevant) continue;
     const stats = productStats(r.productId, now);
     if (!stats) continue;
     const ev = evaluateListing({ price: r.price, zip: r.zip, place: r.place }, stats);
