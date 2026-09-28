@@ -158,6 +158,10 @@ export interface ProductStats {
     /** Sinais que compõem a nota (valor 0–100 e peso). */
     components: LiquidityComponent[];
   };
+  /** Tendência do preço vendido (Theil–Sen). null = poucos dados (< 8 vendas ou < 7 dias). */
+  trend: PriceTrend | null;
+  /** Lucro esperado por semana ao comprar no "comprar até" (só com vendas reais). */
+  potential: { expectedProfit7d: number; roiWeekPct: number } | null;
   /** Sugestões para quem vai REVENDER. */
   sell: { buyNowPrice: number | null; note: string; bestEndSlots: { slot: string; median: number; n: number }[] };
   pricing: {
@@ -185,6 +189,42 @@ export interface LiquidityComponent {
   value: number;
   weight: number;
   detail: string;
+}
+
+export interface PriceTrend {
+  chfPerWeek: number;
+  pctPerWeek: number;
+  n: number;
+  spanDays: number;
+  /** Quanto foi descontado da revenda rápida (CHF, negativo) e para quantos dias de espera. */
+  appliedCHF: number;
+  holdDays: number;
+}
+
+/**
+ * Tendência robusta (estimador de Theil–Sen: mediana dos declives entre todos os pares de vendas).
+ * Um ou dois preços estranhos não mudam o resultado, ao contrário de uma regressão linear comum.
+ */
+export function priceTrend(points: { t: number; v: number }[]): PriceTrend | null {
+  const pts = points.filter((p) => Number.isFinite(p.t) && p.v > 0).sort((a, b) => a.t - b.t);
+  if (pts.length < 8) return null;
+  const spanDays = (pts[pts.length - 1].t - pts[0].t) / DAY;
+  if (spanDays < 7) return null;
+  const slopes: number[] = [];
+  for (let i = 0; i < pts.length; i++)
+    for (let j = i + 1; j < pts.length; j++) {
+      const dt = (pts[j].t - pts[i].t) / DAY;
+      if (dt >= 0.5) slopes.push((pts[j].v - pts[i].v) / dt);
+    }
+  if (slopes.length < 10) return null;
+  slopes.sort((a, b) => a - b);
+  const perDay = quantile(slopes, 0.5);
+  const med = quantile(pts.map((p) => p.v).sort((a, b) => a - b), 0.5);
+  return {
+    chfPerWeek: Math.round(perDay * 7 * 10) / 10,
+    pctPerWeek: Math.round(((perDay * 7) / med) * 1000) / 10,
+    n: pts.length, spanDays: Math.round(spanDays), appliedCHF: 0, holdDays: 0,
+  };
 }
 
 /** Limite inferior (80 %, unilateral) de uma contagem de Poisson — aproximação de Wilson–Hilferty. */
@@ -324,8 +364,10 @@ export function computeProductStats(
       `${sold.length} de ${closedCount} leilões terminados venderam`);
   }
   if (auctionsWithBidsPct !== null && avgBids !== null) {
-    add('procura', 'Procura agora', auctionsWithBidsPct * 0.5 + Math.min(avgBids, 10) * 5, 0.25, rel(auctions.length, 5),
-      `${auctionsWithBidsPct}% dos ${auctions.length} leilões ativos têm lances (média ${avgBids})`);
+    // Média com cada leilão limitado a 10 lances: 1 leilão com 250 lances não pode "fingir" procura geral.
+    const cappedBids = r2(auctions.reduce((a, r) => a + Math.min(r.bids, 10), 0) / auctions.length);
+    add('procura', 'Procura agora', auctionsWithBidsPct * 0.5 + cappedBids * 5, 0.25, rel(auctions.length, 5),
+      `${auctionsWithBidsPct}% dos ${auctions.length} leilões ativos têm lances (média ${avgBids}; contando no máx. 10 por leilão: ${cappedBids})`);
   }
   if (medDays !== null) {
     add('velocidade', 'Velocidade de venda', 100 * Math.exp(-medDays / 7), 0.15, rel(daysToSell.length, 3),
@@ -344,7 +386,9 @@ export function computeProductStats(
   } else {
     const PRIOR_W = 0.15;
     const wSum = components.reduce((a, c) => a + c.weight, 0);
-    const score = Math.round((PRIOR_W * 50 + components.reduce((a, c) => a + c.weight * c.value, 0)) / (PRIOR_W + wSum));
+    const raw = Math.round((PRIOR_W * 50 + components.reduce((a, c) => a + c.weight * c.value, 0)) / (PRIOR_W + wSum));
+    // Sem uma única venda registada, a procura sozinha não prova giro rápido → teto de 59 ("médio").
+    const score = salesCount === 0 ? Math.min(raw, 59) : raw;
     const salesW = components.filter((c) => c.key !== 'procura').reduce((a, c) => a + c.weight, 0);
     const showRate = daysTracked >= 3;
     liquidity = {
@@ -389,6 +433,16 @@ export function computeProductStats(
       quick = r2(ask.p25! * 0.9);
     }
   }
+  // Tendência de preço: se o preço está a cair, o preço de revenda é o de DAQUI a alguns dias (tempo até vender).
+  const trend = priceTrend(sold.map((r) => ({ t: new Date(r.closedAt!).getTime(), v: r.finalPrice! })));
+  let trendAdj = 0;
+  if (trend && quick && trend.chfPerWeek < 0) {
+    const holdDays = medDays ?? 7;
+    trendAdj = Math.max((trend.chfPerWeek / 7) * holdDays, -quick * 0.15);
+    quick = r2(quick + trendAdj);
+    trend.appliedCHF = Math.round(trendAdj);
+    trend.holdDays = holdDays;
+  }
   // Preços muito espalhados (tamanhos/estados/modelos diferentes misturados) → baixa a confiança.
   const spreadSrc = basis === 'vendidos' ? soldDist : basis === 'pedidos' ? dist(asking) : null;
   const spread = spreadSrc && spreadSrc.median && spreadSrc.p25 !== null && spreadSrc.p75 !== null
@@ -397,6 +451,14 @@ export function computeProductStats(
   if (dispersed) confidence = confidence === 'alta' ? 'media' : 'baixa';
   const recommended = quick ? maxBuyFor(quick, p) : null;
   const ceiling = median ? maxBuyFor(median, p) : null;
+
+  // ── potencial: lucro esperado por semana = lucro no "comprar até" × chance de vender em 7 dias
+  const potential = recommended?.profitAtMaxBuy && recommended.maxBuy && liquidity.sellChance7d !== null && salesCount > 0
+    ? {
+        expectedProfit7d: Math.round(recommended.profitAtMaxBuy * (liquidity.sellChance7d / 100)),
+        roiWeekPct: r2((recommended.profitAtMaxBuy * (liquidity.sellChance7d / 100) / recommended.maxBuy) * 100),
+      }
+    : null;
 
   // ── oportunidades ativas agora
   const opportunities: Opportunity[] = [];
@@ -497,6 +559,7 @@ export function computeProductStats(
   else verdict = `Compre até CHF ${recommended.maxBuy} para revender a ~CHF ${Math.round(quick!)} com lucro ≈ CHF ${Math.round(recommended.profitAtMaxBuy!)}.`;
   if (basis === 'pedidos') verdict += ' (Estimativa pelos preços PEDIDOS — ainda sem vendas confirmadas; sem alertas até haver vendas.)';
   else if (confidence === 'baixa') verdict += ' (Confiança baixa: baseado em poucos dados.)';
+  if (trend && trend.appliedCHF) verdict += ` Preço a cair ${Math.abs(trend.pctPerWeek)} %/semana: revenda já descontada em CHF ${Math.abs(trend.appliedCHF)}.`;
   if (dispersed) verdict += ' ⚠️ Preços muito espalhados: o anúncio pode não ser comparável (tamanho, estado ou modelo diferente).';
 
   const last = runs.find((r) => r.at === lastRunAt);
@@ -521,6 +584,8 @@ export function computeProductStats(
     auctionStrategy,
     sold: soldDist,
     liquidity,
+    trend,
+    potential,
     sell: { buyNowPrice: sellBuyNow, note: sellNote, bestEndSlots },
     pricing: { basis, confidence, resaleMedian: median, resaleQuick: quick === null ? null : r2(quick), recommended, ceiling },
     opportunities: opportunities.slice(0, 20),

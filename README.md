@@ -95,7 +95,9 @@ Opções do runner:
   - **Leilões que vendem** (15 %): vendidos ÷ terminados, com prior Beta(2,2) (1 de 1 = 60 %, não 100 %).
   - **Velocidade** (15 %): 100·e^(−dias até vender ÷ 7).
   - **Preço estável** (10 %): 1 − (P75 − P25) ÷ mediana ÷ 0,6.
-  - Rótulos: ≥ 60 rápido, ≥ 40 médio, abaixo lento. O detalhe de cada produto mostra "Por que este giro?".
+  - Rótulos: ≥ 60 rápido, ≥ 40 médio, abaixo lento. Sem nenhuma venda registada, a nota fica no máximo em 59 (médio). Na procura, cada leilão conta no máximo 10 lances. O detalhe de cada produto mostra "Por que este giro?".
+- **Tendência do preço** (≥ 8 vendas em ≥ 7 dias): estimador de Theil–Sen (mediana dos declives entre pares de vendas, resistente a preços estranhos). Se o preço cai, a revenda rápida é descontada pelo tempo até vender (máx. −15 %).
+- **Potencial** (CHF/semana): lucro no "comprar até" × chance de vender em 7 dias. O Ranking ordena por potencial ou por giro.
 - **Confiança**: `alta` com 10 ou mais vendas, `media` com 5–9, `baixa` quando se baseia em lances ativos ou preços pedidos.
 
 > Os números ficam fiáveis depois de **7–14 dias** de recolha: é o tempo de os leilões observados terminarem e serem confirmados.

@@ -370,6 +370,50 @@ async function main() {
     console.log(`    → 2 anúncios: ${few.liquidity.score} · 30 anúncios: ${many.liquidity.score} · 1 venda só: ${one.liquidity.score}`);
   });
 
+  await test('liquidez: sem vendas nunca é "rápido"; 1 leilão com 250 lances não infla a procura', () => {
+    const { computeProductStats: cps } = require('../lib/stats') as typeof import('../lib/stats');
+    const t0 = new Date('2026-09-28T07:00:00Z');
+    const mk = (id: string, o: Partial<import('../lib/types').ListingRecord>): import('../lib/types').ListingRecord => ({
+      id, productId: 'iphone-13', title: `iPhone 13 ${id}`, url: `https://www.ricardo.ch/de/a/x-${id}/`, mode: 'auction',
+      bidPrice: 100, buyNowPrice: null, bids: 0, endDate: '2026-10-02T10:00:00Z', condition: null, relevant: true,
+      firstSeen: '2026-09-27T10:00:00Z', lastSeen: t0.toISOString(), seenCount: 3, history: [], status: 'active',
+      finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null, ...o,
+    });
+    // Caso MacBook M4: 7 leilões, 3 com lances (média 37 por causa de 1 com 230), 0 vendas.
+    const bids = [230, 20, 9, 0, 0, 0, 0];
+    const recs = [...bids.map((b, i) => mk(`a${i}`, { bids: b })), ...[380, 390, 400, 410, 420].map((v, i) => mk(`b${i}`, { mode: 'buynow', bidPrice: null, buyNowPrice: v }))];
+    const runs = [{ at: '2026-09-27T12:00:00Z', found: 12, relevant: 12, complete: true }, { at: t0.toISOString(), found: 12, relevant: 12, complete: true }];
+    const st = cps(iphone, recs, runs, t0, 30);
+    assert.notEqual(st.liquidity.label, 'rapido');
+    assert.ok(st.liquidity.score! <= 59, `score ${st.liquidity.score}`);
+    const proc = st.liquidity.components.find((c) => c.key === 'procura')!;
+    assert.ok(proc.value < 50, `procura ${proc.value}`);
+    assert.equal(st.potential, null, 'sem vendas não há potencial');
+    console.log(`    → M4-like: giro ${st.liquidity.score} (${st.liquidity.label}), procura ${proc.value}`);
+  });
+  await test('tendência Theil–Sen: preço a cair desconta a revenda; 1 outlier não muda', () => {
+    const { priceTrend, computeProductStats: cps } = require('../lib/stats') as typeof import('../lib/stats');
+    const day = 864e5, t = Date.parse('2026-09-01T12:00:00Z');
+    // 400 → 372 em 14 dias (−2 CHF/dia = −14/semana) + 1 venda absurda a 900.
+    const pts = Array.from({ length: 15 }, (_, i) => ({ t: t + i * day, v: 400 - 2 * i }));
+    const tr = priceTrend([...pts, { t: t + 7 * day, v: 900 }])!;
+    assert.ok(Math.abs(tr.chfPerWeek + 14) < 1.5, `declive ${tr.chfPerWeek}`);
+    assert.ok(tr.pctPerWeek < -3 && tr.pctPerWeek > -4.5, `% ${tr.pctPerWeek}`);
+    assert.equal(priceTrend(pts.slice(0, 5)), null, 'poucos dados → sem tendência');
+    const mk = (i: number, v: number): import('../lib/types').ListingRecord => ({
+      id: `t${i}`, productId: 'iphone-13', title: `iPhone 13 t${i}`, url: `https://www.ricardo.ch/de/a/x-t${i}/`, mode: 'auction',
+      bidPrice: v, buyNowPrice: null, bids: 9, endDate: new Date(t + i * day).toISOString(), condition: null, relevant: true,
+      firstSeen: new Date(t + i * day - 5 * day).toISOString(), lastSeen: new Date(t + i * day).toISOString(), seenCount: 3, history: [],
+      status: 'sold', finalPrice: v, soldVia: 'auction', soldEvidence: 'inferred', closedAt: new Date(t + i * day).toISOString(), checkAttempts: 0, lastCheckAt: null,
+    });
+    const now = new Date(t + 15 * day);
+    const runs = [{ at: new Date(t - day).toISOString(), found: 60, relevant: 40, complete: true }, { at: now.toISOString(), found: 60, relevant: 40, complete: true }];
+    const st = cps(iphone, pts.map((p, i) => mk(i, p.v)), runs, now, 30);
+    assert.ok(st.trend && st.trend.appliedCHF < 0, 'revenda deve ser descontada');
+    assert.ok(st.potential && st.potential.expectedProfit7d > 0);
+    console.log(`    → tendência ${st.trend!.pctPerWeek}%/sem, desconto ${st.trend!.appliedCHF} CHF, potencial ${st.potential!.expectedProfit7d}/sem`);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${process.exitCode ? '❌ Falhas encontradas' : `✅ ${passed} testes OK`}\n`);
 }

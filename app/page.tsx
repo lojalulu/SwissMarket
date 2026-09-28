@@ -273,16 +273,28 @@ function RadarView({ opps }: { opps: Opp[] }) {
 // ─────────────────────────────── Ranking ───────────────────────────────
 
 function Ranking({ products, onOpen }: { products: ProductStats[]; onOpen: (id: string) => void }) {
+  const [by, setBy] = useState<"potencial" | "giro">("potencial");
   const rows = [...products].filter((p) => p.tracking.lastRun)
-    .sort((a, b) => (b.liquidity.score ?? -1) - (a.liquidity.score ?? -1));
+    .sort((a, b) => by === "potencial"
+      ? (b.potential?.expectedProfit7d ?? -1) - (a.potential?.expectedProfit7d ?? -1) || (b.liquidity.score ?? -1) - (a.liquidity.score ?? -1)
+      : (b.liquidity.score ?? -1) - (a.liquidity.score ?? -1));
   return (
     <section className="overflow-x-auto rounded-2xl bg-slate-900/70 ring-1 ring-white/10">
+      <div className="flex items-center gap-2 px-3 pt-3 text-xs">
+        <span className="text-slate-400">Ordenar por:</span>
+        {(["potencial", "giro"] as const).map((k) => (
+          <button key={k} onClick={() => setBy(k)}
+            className={`rounded-full px-3 py-1 ring-1 ${by === k ? "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40" : "text-slate-300 ring-white/10"}`}>
+            {k === "potencial" ? "Potencial (CHF/semana)" : "Giro"}
+          </button>
+        ))}
+      </div>
       <table className="tabular w-full text-left text-sm">
         <thead className="text-[11px] uppercase tracking-wide text-slate-500">
           <tr>
             <th className="px-3 py-2 font-normal">#</th><th className="font-normal">Produto</th><th className="font-normal">Giro</th>
             <th className="hidden font-normal sm:table-cell">Vende em 7d</th><th className="hidden font-normal sm:table-cell">Dias estoque</th>
-            <th className="font-normal">Até</th><th className="pr-3 font-normal">Lucro</th>
+            <th className="font-normal">Até</th><th className="pr-3 font-normal">Lucro · /sem.</th>
           </tr>
         </thead>
         <tbody className="text-slate-200">
@@ -298,12 +310,16 @@ function Ranking({ products, onOpen }: { products: ProductStats[]; onOpen: (id: 
               <td className="hidden sm:table-cell">{p.liquidity.sellChance7d !== null ? `${p.liquidity.sellChance7d}%` : "—"}</td>
               <td className="hidden sm:table-cell">{p.liquidity.daysOfSupply ?? "—"}</td>
               <td className="font-semibold text-white">{chf(p.pricing.recommended?.maxBuy)}</td>
-              <td className="pr-3 text-emerald-300">{chf(p.pricing.recommended?.profitAtMaxBuy)}</td>
+              <td className="pr-3 text-emerald-300">
+                {chf(p.pricing.recommended?.profitAtMaxBuy)}
+                <div className="text-[11px] text-slate-400">{p.potential ? `≈ ${chf(p.potential.expectedProfit7d)}/sem` : "sem vendas"}</div>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       <p className="px-3 py-2 text-xs text-slate-500">
+        Potencial = lucro no "comprar até" × chance de vender em 7 dias: quanto cada compra rende, em média, por semana. Só aparece com vendas reais.
         ~ = giro estimado sobretudo pelos leilões ativos (poucas vendas ainda). Toque num produto e veja "Por que este giro?".
         Dias de estoque = anúncios ao preço de mercado ÷ vendas por dia: abaixo de ~10 o mercado absorve rápido; acima de 30 há excesso de oferta.
       </p>
@@ -372,6 +388,19 @@ function LiquidityBox({ p }: { p: ProductStats }) {
           <Stat label="Vende em 7 dias" value={l.sellChance7d !== null ? `${l.sellChance7d}%` : "—"} sub="chance de 1 anúncio" />
           <Stat label="Dias de estoque" value={l.daysOfSupply !== null ? String(Math.round(l.daysOfSupply)) : "—"} sub={l.daysOfSupplyWorst !== null ? `pior caso ${Math.round(l.daysOfSupplyWorst)}` : undefined} />
           <Stat label="Concorrência" value={String(l.competingListings)} sub="ao preço de mercado" />
+        </div>
+      )}
+      {(p.potential || p.trend) && (
+        <div className="mb-2 space-y-0.5 text-xs text-slate-300">
+          {p.potential && (
+            <p>💰 Potencial: <b className="text-emerald-300">≈ {chf(p.potential.expectedProfit7d)}/semana</b> por compra ({p.potential.roiWeekPct}% do capital por semana)</p>
+          )}
+          {p.trend && (
+            <p>
+              {p.trend.pctPerWeek <= -1 ? "📉" : p.trend.pctPerWeek >= 1 ? "📈" : "➡️"} Tendência do preço: <b className={p.trend.pctPerWeek <= -1 ? "text-rose-300" : "text-slate-100"}>{p.trend.pctPerWeek > 0 ? "+" : ""}{p.trend.pctPerWeek}%/semana</b> ({p.trend.chfPerWeek > 0 ? "+" : ""}{p.trend.chfPerWeek} CHF, {p.trend.n} vendas em {p.trend.spanDays} dias)
+              {p.trend.appliedCHF !== 0 && <> · revenda já descontada em {chf(Math.abs(p.trend.appliedCHF))} ({p.trend.holdDays} dias até vender)</>}
+            </p>
+          )}
         </div>
       )}
       <ul className="space-y-1.5">
