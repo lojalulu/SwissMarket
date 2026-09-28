@@ -170,14 +170,30 @@ export function parsePosted(text: string, now = new Date()): string | null {
   return null;
 }
 
-/** Último preço "590.-" / "1'250.–" / "CHF 590" no texto de um card. */
-function priceFromCardText(text: string): { price: number | null; free: boolean } {
-  if (/\b(gratis|zu verschenken|gratuit)\b/i.test(text)) return { price: null, free: true };
-  const all = [...text.matchAll(/(?:^|[\s|])(\d{1,3}(?:['’]\d{3})+|\d{1,6})\s?\.\s?[-–—]\s?\+?(?=\s|\||$)/g)];
-  if (all.length) return { price: parseChf(all[all.length - 1][1]), free: false };
-  const chf = [...text.matchAll(/CHF\s*(\d{1,3}(?:['’]\d{3})+|\d{1,6})(?:\.(\d{2}))?/g)];
-  if (chf.length) return { price: parseChf(chf[chf.length - 1][1]), free: false };
-  return { price: null, free: false };
+// Um preço "sozinho" num bloco do card: "590.-" · "1'250.–" · "15.- +" · "CHF 590" · "CHF 590.00".
+// (Números soltos como "3" = nº de fotos NÃO contam; preços dentro da descrição, como "NP 1'199.-", também não.)
+const PRICE_CHUNK = /^(?:CHF\s*)?(\d{1,3}(?:['’]\d{3})+|\d{1,6})\s?\.\s?[-–—]\s?\+?$|^CHF\s*(\d{1,3}(?:['’]\d{3})+|\d{1,6})(?:\.\d{2})?\s*\+?$/;
+const FREE_CHUNK = /^(gratis|zu verschenken|gratuit|gratuito)$/i;
+// "Kappel SO, 4616, Heute 10:08" — início de um card.
+const LOC_CHUNK = /^([A-Za-zÀ-ÿ.'’\-\/() ]{2,40}),\s*([1-9]\d{3})(?:,\s*(.{3,40}))?$/;
+
+/**
+ * Lê um card a partir dos blocos de texto (separados por " | "): local → título → descrição → PREÇO.
+ * Pára no início do card seguinte (outro "Local, 1234, data"), porque o Tutti mete anúncios do Ricardo
+ * ("auf Ricardo", sem link /vi/) entre os seus — e esses têm preços próprios (lance, Sofortkauf).
+ */
+function cardFields(chunks: string[]): { price: number | null; zip: string | null; place: string | null; when: string | null } {
+  const li = chunks.findIndex((c) => LOC_CHUNK.test(c));
+  const loc = li >= 0 ? chunks[li].match(LOC_CHUNK) : null;
+  let price: number | null = null;
+  for (let i = li >= 0 ? li + 1 : 0; i < chunks.length; i++) {
+    const c = chunks[i];
+    if (i > li && LOC_CHUNK.test(c)) break; // próximo card
+    if (FREE_CHUNK.test(c)) break;
+    const m = c.match(PRICE_CHUNK);
+    if (m) { price = parseChf(m[1] ?? m[2]); break; }
+  }
+  return { price, zip: loc?.[2] ?? null, place: loc?.[1]?.trim() ?? null, when: loc?.[3] ?? null };
 }
 
 function parseCards(html: string, source: BuySource, now: Date): Map<string, ClassifiedListing> {
@@ -200,17 +216,16 @@ function parseCards(html: string, source: BuySource, now: Date): Map<string, Cla
     const alt = seg.match(/<img[^>]*alt="([^"]{3,})"/i)?.[1];
     const title = [...titles, ...(alt ? [decodeEntities(alt)] : [])].sort((a, b) => a.length - b.length)[0];
     if (!title) continue;
-    const loc = text.match(/([A-Za-zÀ-ÿ.'’\-\/() ]{2,40}),\s*([1-9]\d{3})\b(?:,\s*([^|]{3,40}))?/);
-    const { price } = priceFromCardText(text.replace(title, ' '));
+    const f = cardFields(text.split(' | ').map((c) => c.trim()).filter(Boolean));
     const href = links.find((l) => l.id === id)!.href;
     const img = seg.match(/<img[^>]*src="(https?:[^"]+)"/i)?.[1] ?? null;
     out.set(id, {
       source, id, title,
       url: href.startsWith('http') ? decodeEntities(href) : BUY_SOURCES[source].base + decodeEntities(href),
-      price,
-      zip: loc?.[2] ?? null,
-      place: loc?.[1]?.trim() ?? null,
-      postedAt: loc?.[3] ? parsePosted(loc[3], now) : parsePosted(text, now),
+      price: f.price,
+      zip: f.zip,
+      place: f.place,
+      postedAt: f.when ? parsePosted(f.when, now) : null,
       image: img ? decodeEntities(img) : null,
       from: 'html',
     });

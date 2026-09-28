@@ -435,6 +435,20 @@ async function main() {
     assert.equal(by['83200006'].price, null);                 // Gratis
     assert.equal(by['83200001'].url, 'https://www.tutti.ch/de/vi/bern/handys/iphone-15-pro-128gb-blau/83200001');
   });
+  await test('Tutti real: anúncio do Ricardo intercalado não rouba o preço da capa (bug CHF 400)', () => {
+    const r = parseClassifiedSearch(fx('tutti-search-real.html'), 'tutti', t0);
+    const by = Object.fromEntries(r.items.map((i) => [i.id, i]));
+    assert.equal(r.items.length, 4, 'o anúncio do Ricardo (sem /vi/) não entra');
+    assert.equal(by['83208001'].price, 10);
+    assert.equal(by['83208001'].title, 'Iphone 15 pro Naruto Hülle');
+    assert.equal(by['83208001'].zip, '4616');
+    assert.equal(by['83208001'].place, 'Kappel SO');
+    assert.equal(by['83208002'].price, 10);
+    assert.equal(by['83208698'].price, 590);
+    assert.equal(by['83207500'].price, 549, 'NP 1\'199.- na descrição não conta');
+    assert.equal(by['83207500'].postedAt, '2026-09-28T07:52:00.000Z');
+    assert.equal(by['83208698'].image, 'https://c.tutti.ch/thumbnail/83208698.jpg');
+  });
   await test('JSON do Tutti (__NEXT_DATA__) e ignora anúncio que não está na página', () => {
     const r = parseClassifiedSearch(fx('tutti-search-json.html'), 'tutti', t0);
     assert.equal(r.items.length, 2);
