@@ -462,6 +462,31 @@ async function main() {
     assert.ok(st.pricing.resaleQuick! >= 160, `revenda ${st.pricing.resaleQuick}`);
   });
 
+  await test('11 produtos novos: aparelho conta, peças/acessórios/outros modelos não', () => {
+    const cases: [string, string[], string[]][] = [
+      ['thermomix-tm6', ['Thermomix TM6 wie neu', 'Vorwerk Thermomix TM6 mit 2. Mixtopf', 'Thermomix TM6 inkl. Cook-Key und Varoma'],
+        ['Thermomix TM6 Mixtopf', 'Messer für Thermomix TM6', 'Thermomix TM5', 'Thermomix TM7 neu', 'Thermomix Friend für TM6', 'Varoma TM6']],
+      ['thermomix-tm7', ['Thermomix TM7 neuwertig'], ['Thermomix TM6', 'Mixtopf TM7']],
+      ['meta-quest-3', ['Meta Quest 3 128GB', 'Meta Quest 3 512 GB mit Elite Strap'], ['Meta Quest 3S', 'Meta Quest 3 Controller', 'Quest 3 Ladestation', 'Meta Quest 2']],
+      ['dji-osmo-pocket-3', ['DJI Osmo Pocket 3 Creator Combo', 'DJI Osmo Pocket 3 mit Mikrofon'], ['DJI Osmo Pocket 3 Weitwinkel Adapter', 'Filter Set für DJI Osmo Pocket 3', 'DJI Osmo Pocket 2']],
+      ['airpods-max', ['Apple AirPods Max Space Grau', 'AirPods Max USB-C blau'], ['AirPods Max Ohrpolster', 'AirPods Max Smart Case', 'AirPods Pro 2']],
+      ['ps5-digital', ['PS5 Slim Digital Edition 1TB', 'PlayStation 5 Digital Konsole inkl. Controller'], ['PS5 Digital Faceplate', 'PlayStation 5 Pro', 'PS5 Laufwerk für Digital', 'PS5 Disc Edition']],
+      ['xbox-series-x', ['Xbox Series X 1TB', 'Microsoft Xbox Series X Konsole mit 2 Controllern'], ['Xbox Series S', 'Xbox Series X Controller', 'Xbox One X']],
+      ['ipad-air-m2-11', ['iPad Air M2 11 Zoll 128GB Wi-Fi', 'Apple iPad Air 11" M2 Blau'], ['iPad Air M2 13 Zoll', 'iPad Air M2 256GB', 'iPad Air M2 Cellular', 'iPad Air M2 Hülle', 'iPad Pro M2']],
+      ['dyson-v15', ['Dyson V15 Detect Absolute', 'Dyson V15 Detect Akkusauger komplett'], ['Dyson V15 Akku', 'Bodendüse Dyson V15', 'Dyson V11 Absolute', 'Dyson Gen5detect']],
+      ['garmin-fenix-7-pro', ['Garmin Fenix 7 Pro Solar', 'Garmin fenix 7X Pro Sapphire'], ['Garmin Fenix 7 Pro Armband', 'Garmin Fenix 8', 'Garmin Fenix 7 Solar']],
+      ['rog-ally-x', ['ASUS ROG Ally X 1TB Z1 Extreme', 'Asus ROG Ally X Konsole'], ['ASUS ROG Xbox Ally X', 'ROG Ally Z1 Extreme', 'ROG Ally X Hülle']],
+    ];
+    for (const [id, ok, no] of cases) {
+      const p = getProduct(id)!;
+      assert.ok(p, id);
+      for (const t of ok) assert.equal(checkRelevance(t, '', p).relevant, true, `${id} deve aceitar: ${t} (${checkRelevance(t, '', p).reason})`);
+      for (const t of no) assert.equal(checkRelevance(t, '', p).relevant, false, `${id} deve rejeitar: ${t}`);
+    }
+    // o PS5 (Disc) continua a rejeitar o Digital
+    assert.equal(checkRelevance('PS5 Slim Digital Edition', '', getProduct('ps5')!).relevant, false);
+  });
+
   console.log('\nTutti / Anibis (lado da compra)');
   const { parseClassifiedSearch, parseClassifiedDetail, sellerTrust, parsePosted } = await import('../lib/classifieds');
   const geo = await import('../lib/geo');

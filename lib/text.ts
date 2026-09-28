@@ -28,15 +28,25 @@ function hasTerm(haystack: string, term: string): boolean {
 // Palavras que indicam "vem junto": "PS5 mit Controller" = consola COM comando (não é só o comando).
 const CONNECTORS = new Set(['mit', 'inkl', 'und', 'plus', 'avec', 'et', 'with', 'and', 'con', 'e', 'samt', 'sowie', '2', '3', '4', 'zwei', 'drei', 'deux', 'two']);
 
-/** O termo aparece como objeto principal (não precedido de "mit", "inkl.", "+"…)? */
-function standaloneTerm(haystack: string, term: string): boolean {
+/**
+ * O termo aparece como objeto principal (não precedido de "mit", "inkl.", "2"…)?
+ * Um número só conta como quantidade ("PS5 2 Controller") se NÃO for o fim do nome do modelo
+ * ("Quest 3 Controller" = comando do Quest 3 → acessório).
+ */
+function standaloneTerm(haystack: string, term: string, modelTerms: string[] = []): boolean {
   const t = normalize(term);
   if (!t) return false;
   const words = haystack.split(' ');
   const tw = t.split(' ');
+  const endsModel = (i: number) => modelTerms.some((m) => {
+    const mw = m.split(' ');
+    return i - mw.length >= 0 && mw.every((w, j) => words[i - mw.length + j] === w);
+  });
   for (let i = 0; i + tw.length <= words.length; i++) {
     if (tw.every((w, j) => words[i + j] === w)) {
-      if (i === 0 || !CONNECTORS.has(words[i - 1])) return true;
+      const prev = words[i - 1];
+      if (i === 0 || !CONNECTORS.has(prev)) return true;
+      if (/^\d+$/.test(prev) && endsModel(i)) return true;
     }
   }
   return false;
@@ -63,7 +73,8 @@ export function checkRelevance(title: string, url: string, product: ProductConfi
     if (hasTerm(hay, term)) return { relevant: false, reason: `excluído: ${term}` };
   }
   if (product.accessoryTerms?.length && !(product.mainItemTerms ?? []).some((t) => hasTerm(hay, t))) {
-    const acc = product.accessoryTerms.find((t) => standaloneTerm(hay, t));
+    const models = product.mustInclude.flat().map(normalize).filter((m) => /\d$/.test(m));
+    const acc = product.accessoryTerms.find((t) => standaloneTerm(hay, t, models));
     if (acc) return { relevant: false, reason: `acessório: ${acc}` };
   }
   return { relevant: true };

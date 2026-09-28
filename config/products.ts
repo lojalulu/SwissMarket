@@ -90,6 +90,30 @@ const DYSON_PARTS = [
 ];
 const DYSON_MAIN = ['komplett', 'complete', 'multistyler', 'styler', 'haarstyler', 'set', 'gerat', 'geraet', 'inkl', 'inklusive', 'avec', 'mit allen', 'origin', 'id'];
 
+// Thermomix: peças soltas (Mixtopf, Messer, Varoma…) ≠ a máquina. "TM6 mit 2. Mixtopf" continua a contar.
+const THERMOMIX_PARTS = [
+  'mixtopf', 'topf', 'messer', 'deckel', 'varoma', 'spatel', 'cook key', 'cookkey', 'sensor', 'dichtung', 'garkorb', 'sieb',
+  'rezeptbuch', 'rezept', 'kochbuch', 'buch', 'chip', 'abdeckung', 'schutzhulle', 'hulle', 'cover', 'schneidaufsatz',
+  'spiralschneider', 'zubehor', 'zubehoer', 'aufsatz', 'blade cover', 'schaler', 'mixtopfdeckel', 'bol', 'couteau', 'boccale',
+];
+const THERMOMIX_MAIN = ['komplett', 'complete', 'grundgerat', 'grundgeraet', 'kuchenmaschine', 'kuechenmaschine', 'gerat', 'geraet', 'set', 'inkl', 'inklusive', 'avec', 'con'];
+const VR_ACCESSORIES = [
+  'controller', 'strap', 'kopfband', 'halterung', 'ladestation', 'charging', 'dock', 'case', 'tasche', 'etui', 'hulle', 'huelle',
+  'kabel', 'cable', 'link', 'linsen', 'lens', 'polster', 'facial', 'interface', 'cover', 'akku', 'battery', 'grip', 'stand', 'stander',
+];
+const VR_MAIN = ['headset', 'brille', 'vr brille', 'komplett', 'complete', 'set', 'bundle', 'inkl', 'inklusive', 'avec', '128', '512'];
+const CAMERA_ACCESSORIES = [
+  'filter', 'nd', 'hulle', 'huelle', 'case', 'tasche', 'etui', 'griff', 'handle', 'akkugriff', 'battery handle', 'mikrofon',
+  'microphone', 'mic', 'stativ', 'tripod', 'halterung', 'mount', 'weitwinkel', 'wide angle', 'adapter', 'kabel', 'cable', 'schutz', 'glas',
+];
+const CAMERA_MAIN = ['creator', 'combo', 'komplett', 'complete', 'kamera', 'camera', 'gimbal', 'inkl', 'inklusive', 'avec'];
+const VACUUM_PARTS = [
+  ...DYSON_PARTS, 'akku', 'battery', 'wandhalterung', 'rohr', 'tube', 'schlauch', 'bodendüse', 'bodenduese', 'motorbürste',
+  'fluffy', 'laser head', 'ladegerät', 'ladegeraet', 'netzteil',
+];
+const VACUUM_MAIN = ['komplett', 'complete', 'set', 'inkl', 'inklusive', 'staubsauger', 'akkusauger', 'sauger', 'gerat', 'geraet', 'mit allen', 'avec'];
+const WATCH_EXCLUDE = ['armband', 'band', 'strap', 'quickfit', 'ladekabel', 'ladegerat', 'kabel', 'schutz', 'glas', 'folie', 'hulle', 'huelle', 'case', 'bumper', 'cover'];
+
 const IPHONE_EXCLUDE = ['pro', 'max', 'mini', 'plus', 'hulle', 'huelle', 'case', 'cover', 'panzerglas', 'schutzglas', 'folie', 'ladekabel'];
 const MACBOOK_EXCLUDE = ['pro', 'm1 pro', 'm1 max', 'ipad', 'hulle', 'case', 'sleeve', 'tasche', 'netzteil', 'ladegerat', 'tastatur', 'keyboard', 'akku', 'battery'];
 
@@ -265,6 +289,99 @@ export const MONITORED_PRODUCTS: ProductConfig[] = [
     exclude: ['hulle', 'huelle', 'case', 'tasche', 'dock only', 'nur dock', 'folie', 'skin', 'grip'],
     priceFloor: 200, priceCeil: 750, feeRate: 0.12,
     accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
+  },
+
+  {
+    id: 'ps5-digital', name: 'PlayStation 5 Digital', category: 'gaming',
+    searchTerm: 'playstation 5 digital',
+    extraSearchTerms: ['ps5 digital'],
+    mustInclude: [['playstation 5', 'ps 5', 'ps5', 'playstation5'], ['digital']],
+    exclude: ['pro', 'portal', 'vr', 'cover', 'faceplate', 'ladestation', 'headset', 'laufwerk', 'disc drive', 'dualsense edge', 'controller only', 'nur controller', 'code', 'guthaben', 'gift card'],
+    priceFloor: 180, priceCeil: 500, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
+  },
+  {
+    id: 'xbox-series-x', name: 'Xbox Series X', category: 'gaming',
+    searchTerm: 'xbox series x',
+    mustInclude: [['xbox'], ['series x', 'seriesx']],
+    exclude: ['series s', 'one', '360', 'game pass', 'gamepass', 'code', 'guthaben', 'gift card', 'nur controller', 'controller only', 'elite'],
+    priceFloor: 200, priceCeil: 600, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
+  },
+  {
+    id: 'rog-ally-x', name: 'ASUS ROG Ally X', category: 'gaming',
+    searchTerm: 'rog ally x',
+    mustInclude: [['rog'], ['ally x', 'allyx']],
+    // O "ROG Xbox Ally X" (2025) é outro produto, mais caro → fora.
+    exclude: ['xbox', 'hulle', 'huelle', 'case', 'tasche', 'folie', 'skin', 'grip', 'dock only', 'nur dock'],
+    priceFloor: 350, priceCeil: 900, feeRate: 0.12,
+    accessoryTerms: CONSOLE_ACCESSORIES, mainItemTerms: CONSOLE_MAIN,
+  },
+  {
+    id: 'meta-quest-3', name: 'Meta Quest 3', category: 'gaming',
+    searchTerm: 'meta quest 3',
+    mustInclude: [['quest'], ['quest 3']],
+    exclude: ['quest 3 s', 'quest 2', 'quest pro', 'quest 1'],
+    priceFloor: 200, priceCeil: 650, feeRate: 0.12,
+    accessoryTerms: VR_ACCESSORIES, mainItemTerms: VR_MAIN,
+  },
+
+  // ─────────────── Tablet, câmara, relógio, casa ───────────────
+  {
+    id: 'ipad-air-m2-11', name: 'iPad Air M2 11" 128GB Wi-Fi', category: 'electronics',
+    searchTerm: 'ipad air m2',
+    // 128 GB Wi-Fi é a versão base: títulos sem capacidade contam; 256+/Cellular/13" ficam de fora.
+    mustInclude: [['ipad'], ['air'], ['m 2', 'm2']],
+    exclude: ['13', '256', '512', '1 tb', 'cellular', 'lte', '5 g', '4 g', 'sim', 'pro', 'm 1', 'm 3', 'm 4', 'macbook',
+      'hulle', 'huelle', 'case', 'cover', 'folie', 'glas', 'pencil', 'keyboard', 'tastatur', 'folio', 'stift'],
+    priceFloor: 300, priceCeil: 800, feeRate: 0.12,
+  },
+  {
+    id: 'dji-osmo-pocket-3', name: 'DJI Osmo Pocket 3', category: 'electronics',
+    searchTerm: 'dji osmo pocket 3',
+    mustInclude: [['osmo', 'dji'], ['pocket 3']],
+    exclude: ['pocket 2', 'pocket 1', 'osmo action', 'osmo mobile', 'osmo 360'],
+    priceFloor: 250, priceCeil: 700, feeRate: 0.12,
+    accessoryTerms: CAMERA_ACCESSORIES, mainItemTerms: CAMERA_MAIN,
+  },
+  {
+    id: 'airpods-max', name: 'AirPods Max', category: 'electronics',
+    searchTerm: 'airpods max',
+    mustInclude: [['airpods', 'air pods'], ['max']],
+    exclude: ['pro', 'smart case', 'case only', 'nur case', 'hulle', 'huelle', 'ohrpolster', 'polster', 'cushion', 'ear pads', 'bugel', 'headband',
+      'kabel', 'einzeln', 'stander', 'stand', 'halter', 'cover'],
+    priceFloor: 180, priceCeil: 600, feeRate: 0.12,
+  },
+  {
+    id: 'garmin-fenix-7-pro', name: 'Garmin Fenix 7 Pro', category: 'electronics',
+    searchTerm: 'garmin fenix 7 pro',
+    mustInclude: [['garmin', 'fenix'], ['fenix'], ['7'], ['pro']],
+    exclude: [...WATCH_EXCLUDE, 'fenix 6', 'fenix 5', 'fenix 8', 'epix'],
+    priceFloor: 250, priceCeil: 800, feeRate: 0.12,
+  },
+  {
+    id: 'dyson-v15', name: 'Dyson V15 Detect', category: 'electronics',
+    searchTerm: 'dyson v15',
+    mustInclude: [['dyson'], ['v 15', 'v15']],
+    exclude: ['v 8', 'v 10', 'v 11', 'v 12', 'gen 5', 'gen5', 'nur', 'ersatz', 'defekt'],
+    priceFloor: 200, priceCeil: 750, feeRate: 0.12,
+    accessoryTerms: VACUUM_PARTS, mainItemTerms: VACUUM_MAIN,
+  },
+  {
+    id: 'thermomix-tm6', name: 'Thermomix TM6', category: 'electronics',
+    searchTerm: 'thermomix tm6',
+    mustInclude: [['thermomix', 'vorwerk'], ['tm 6', 'tm6']],
+    exclude: ['tm 5', 'tm 7', 'tm 31', 'tm 21', 'friend', 'nur', 'ersatz', 'defekt', 'miete', 'mieten'],
+    priceFloor: 400, priceCeil: 1300, feeRate: 0.12,
+    accessoryTerms: THERMOMIX_PARTS, mainItemTerms: THERMOMIX_MAIN,
+  },
+  {
+    id: 'thermomix-tm7', name: 'Thermomix TM7', category: 'electronics',
+    searchTerm: 'thermomix tm7',
+    mustInclude: [['thermomix', 'vorwerk'], ['tm 7', 'tm7']],
+    exclude: ['tm 5', 'tm 6', 'tm 31', 'friend', 'nur', 'ersatz', 'defekt', 'miete', 'mieten'],
+    priceFloor: 700, priceCeil: 1900, feeRate: 0.12,
+    accessoryTerms: THERMOMIX_PARTS, mainItemTerms: THERMOMIX_MAIN,
   },
 
   // ─────────────── Drones ───────────────
