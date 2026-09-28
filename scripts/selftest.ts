@@ -487,6 +487,52 @@ async function main() {
     assert.equal(checkRelevance('PS5 Slim Digital Edition', '', getProduct('ps5')!).relevant, false);
   });
 
+  await test('leilões: chance de ganhar medida em leilões reais (substitui a regra fixa dos 85 %)', () => {
+    const { buildAuctionModel, auctionWinChance } = require('../lib/stats') as typeof import('../lib/stats');
+    const end = Date.parse('2026-09-27T19:00:00Z');
+    // 20 leilões vendidos (mercado ~300): 2 h antes do fim estavam a CHF 150; 12 acabaram a 300, 8 a 220.
+    const recs = Array.from({ length: 20 }, (_, i) => ({
+      id: `m${i}`, productId: 'x', title: 't', url: 'u', mode: 'auction', bidPrice: null, buyNowPrice: null, bids: 9,
+      endDate: new Date(end).toISOString(), condition: null, relevant: true, firstSeen: '', lastSeen: '', seenCount: 1,
+      history: [{ at: new Date(end - 2 * 3600e3).toISOString(), bid: 150, buyNow: null, bids: 5 }],
+      status: 'sold', finalPrice: i < 12 ? 300 : 220, soldVia: 'auction', soldEvidence: 'inferred', closedAt: '', checkAttempts: 0, lastCheckAt: null,
+    })) as unknown as import('../lib/types').ListingRecord[];
+    const model = buildAuctionModel([recs]);
+    assert.equal(model.samples.length, 20);
+    const c = auctionWinChance(model, 150, 240, 300, 2)!;
+    assert.equal(c.chance, 40);            // 8 de 20 acabaram ≤ 240
+    assert.equal(c.estFinal, 300);
+    assert.equal(auctionWinChance(model, 150, 240, 300, 5), null, 'outro intervalo de tempo sem exemplos');
+    assert.equal(auctionWinChance({ samples: [], auctions: 0 }, 150, 240, 300, 2), null);
+
+    // No Radar: lance a 92 % do limite (a regra antiga escondia) aparece com chance medida.
+    const t = new Date('2026-09-28T12:00:00Z');
+    const mk = (id: string, o: Partial<import('../lib/types').ListingRecord>): import('../lib/types').ListingRecord => ({
+      id, productId: 'iphone-13', title: `iPhone 13 ${id}`, url: `https://www.ricardo.ch/de/a/x-${id}/`, mode: 'auction',
+      bidPrice: null, buyNowPrice: null, bids: 0, endDate: '2026-10-05T10:00:00Z', condition: null, relevant: true,
+      firstSeen: '2026-09-25T10:00:00Z', lastSeen: t.toISOString(), seenCount: 3, history: [], status: 'active',
+      finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null, ...o,
+    });
+    const sold = [280, 290, 300, 300, 310, 320].map((v, i) => mk(`s${i}`, { status: 'sold', finalPrice: v, soldEvidence: 'inferred', soldVia: 'auction', bids: 12, closedAt: `2026-09-2${2 + i}T19:00:00Z`, endDate: `2026-09-2${2 + i}T19:00:00Z` }));
+    const runs = [{ at: '2026-09-20T10:00:00Z', found: 60, relevant: 40, complete: true }, { at: t.toISOString(), found: 60, relevant: 40, complete: true }];
+    const base = computeProductStats(iphone, sold, runs, t, 30);
+    const limit = base.pricing.recommended!.maxBuy!;
+    const bid = Math.round(limit * 0.92);
+    const live = mk('live', { bidPrice: bid, bids: 7, endDate: new Date(t.getTime() + 2 * 3600e3).toISOString() });
+    const without = computeProductStats(iphone, [...sold, live], runs, t, 30);
+    assert.equal(without.opportunities.find((o) => o.id === 'live'), undefined, 'sem dados: regra prudente (≤ 85 %)');
+    const market = without.sold.median!;
+    const z = bid / market;
+    const fake = { auctions: 30, samples: Array.from({ length: 30 }, (_, i) => ({ h: 2, z, y: i < 9 ? (limit * 0.95) / market : 1.05 })) };
+    const withModel = computeProductStats(iphone, [...sold, live], runs, t, 30, fake);
+    const o = withModel.opportunities.find((x) => x.id === 'live')!;
+    assert.ok(o, 'com dados: aparece');
+    assert.equal(o.winChance, 30);
+    assert.equal(o.chanceBase, 30);
+    const fakeLow = { auctions: 30, samples: fake.samples.map((x) => ({ ...x, y: 1.05 })) };
+    assert.equal(computeProductStats(iphone, [...sold, live], runs, t, 30, fakeLow).opportunities.find((x) => x.id === 'live'), undefined, 'chance 0 % → não aparece');
+  });
+
   console.log('\nTutti / Anibis (lado da compra)');
   const { parseClassifiedSearch, parseClassifiedDetail, sellerTrust, parsePosted } = await import('../lib/classifieds');
   const geo = await import('../lib/geo');

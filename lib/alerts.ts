@@ -7,6 +7,7 @@
 //
 // Filtros: ALERT_MIN_SCORE (0–100, padrão 45) · ALERT_KINDS=buynow,auction,offer
 // Só alerta quando o preço de revenda já se baseia em vendas/leilões reais (não em preços pedidos).
+import { getAuctionModel } from './auction-model';
 import { getProduct } from '../config/products';
 import { computeProductStats, type Opportunity, type ProductStats } from './stats';
 import { effectiveRecords, markAlerted, runsFor, shouldAlert } from './store';
@@ -43,7 +44,7 @@ export function formatAlert(o: Opportunity, s: ProductStats): { title: string; b
   if (o.kind === 'auction') {
     return {
       title: `⏰ ${s.name}: leilão acaba em ${timeLeft(o.minutesLeft)} — ${chf(o.price)}`,
-      body: `Lance atual ${chf(o.price)} (${o.bids} lances) · licite no máximo ${chf(o.maxBid ?? 0)} · lucro mínimo se ganhar ${chf(o.estProfit)}\n${place}${conf}\n${o.title}`,
+      body: `Lance atual ${chf(o.price)} (${o.bids} lances) · licite no máximo ${chf(o.maxBid ?? 0)} · lucro mínimo se ganhar ${chf(o.estProfit)}${o.winChance !== null ? `\n🎯 chance ~${o.winChance}% de ficar ≤ ${chf(o.maxBid ?? 0)} (final previsto ~${chf(o.estFinal ?? 0)})` : ''}\n${place}${conf}\n${o.title}`,
       tags: ['alarm_clock'], priority: (o.minutesLeft ?? 999) < 60 ? 5 : 4,
     };
   }
@@ -94,7 +95,7 @@ export async function runAlertsFor(productId: string, now = new Date()): Promise
   if (!alertChannels().length) return 0;
   const p = getProduct(productId);
   if (!p) return 0;
-  const stats = computeProductStats(p, effectiveRecords(p.id), runsFor(p.id), now, 30);
+  const stats = computeProductStats(p, effectiveRecords(p.id), runsFor(p.id), now, 30, getAuctionModel(now));
   const minScore = Number(env('ALERT_MIN_SCORE') || 45);
   const kinds = (env('ALERT_KINDS') || 'buynow,auction,offer').split(',').map((k) => k.trim());
   // Sem vendas reais ainda (só preços pedidos) → nada de alertas: o "teto" ainda é um palpite.
@@ -102,6 +103,8 @@ export async function runAlertsFor(productId: string, now = new Date()): Promise
   if (stats.pricing.basis === 'pedidos' && env('ALERT_ALLOW_ASKING') !== '1') return 0;
   const toSend = stats.opportunities
     .filter((o) => o.score >= minScore && kinds.includes(o.kind) && !o.suspicious)
+    // Leilão: com dados, só alerta se a chance real de ganhar dentro do limite for ≥ ALERT_MIN_CHANCE (25 %).
+    .filter((o) => o.kind !== 'auction' || o.winChance === null || o.winChance >= Number(env('ALERT_MIN_CHANCE') || 25))
     .filter((o) => shouldAlert(`${o.kind}:${p.id}:${o.id}`, o.cost, now))
     .slice(0, 5);
   const sent: { key: string; price: number }[] = [];

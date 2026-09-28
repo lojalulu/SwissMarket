@@ -37,6 +37,10 @@ Respeita o `robots.txt` do Ricardo: só abre `/de/s/<termo>/` (sem `?`) e págin
 ## Radar, alertas e ranking (v3)
 
 - **Radar**: oportunidades em tempo real, ordenadas por *score* (lucro, liquidez, confiança e urgência)
+  - **Leilão a terminar** (< 6 h, lance abaixo do teu lance máximo): mostra a **chance real de ganhar dentro do limite**,
+    medida nos leilões já terminados (lance ÷ preço de mercado nesse momento → preço final ÷ mercado, por janela de tempo:
+    < 1 h, 1–3 h, 3–6 h; exemplos de todos os produtos somados). Aparece com chance ≥ 5 %; alerta com ≥ `ALERT_MIN_CHANCE` (25 %).
+    Sem 12+ exemplos parecidos ainda: regra prudente (lance ≤ 85 % do teto).
   - 💰 **Comprar já**: Sofort kaufen + portes ≤ preço máximo de compra
   - ⏰ **Leilão a terminar**: acaba nas próximas 6 h com lance ≤ 85 % do teto (margem para subir)
   - 🤝 **Aceita proposta**: vendedor aceita "Preisvorschlag" e pede até 25 % acima do teto → botão copia a mensagem em alemão

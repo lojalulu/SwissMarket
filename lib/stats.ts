@@ -117,6 +117,12 @@ export interface Opportunity {
   maxBid: number | null;
   /** Preço bom demais para ser verdade (< 45 % da mediana): acessório, defeito escondido ou golpe? */
   suspicious: boolean;
+  /** Leilão: chance (%) de o preço final ficar ≤ ao teu lance máximo, medida em leilões reais já terminados. */
+  winChance: number | null;
+  /** Leilão: preço final previsto (mediana dos casos parecidos). */
+  estFinal: number | null;
+  /** Quantos leilões parecidos serviram de base à chance. */
+  chanceBase: number | null;
   /** 0–100: lucro, liquidez, confiança e urgência. */
   score: number;
 }
@@ -275,12 +281,71 @@ function endSlots(sold: ListingRecord[]): { slot: string; median: number; n: num
     .sort((a, b) => b.median - a.median);
 }
 
+// ───────────────────────────── modelo de leilões (chance de ganhar) ─────────────────────────────
+//
+// Para cada leilão VENDIDO que o robô acompanhou, cada leitura anterior ao fim dá um exemplo:
+//   (horas que faltavam, lance nesse momento ÷ preço de mercado) → preço final ÷ preço de mercado.
+// Tudo em proporção do preço de mercado do produto, por isso exemplos de produtos diferentes somam-se.
+// Pergunta: "leilões que, com ~2 h para acabar, estavam a 55 % do mercado — quantos acabaram ≤ 75 %?"
+
+export interface AuctionSample { h: number; z: number; y: number }
+export interface AuctionModel { samples: AuctionSample[]; auctions: number }
+
+const H_BUCKETS = [1, 3, 6];
+const bucketOf = (h: number) => H_BUCKETS.findIndex((m) => h <= m);
+
+export function buildAuctionModel(byProduct: ListingRecord[][]): AuctionModel {
+  const samples: AuctionSample[] = [];
+  let auctions = 0;
+  for (const recs of byProduct) {
+    const sold = recs.filter((r) => r.relevant && r.status === 'sold' && r.mode !== 'buynow' && r.finalPrice && r.endDate);
+    if (sold.length < 3) continue;
+    const market = quantile(sold.map((r) => r.finalPrice!).sort((a, b) => a - b), 0.5);
+    if (!(market > 0)) continue;
+    for (const r of sold) {
+      const end = Date.parse(r.endDate!);
+      let used = false;
+      for (const snap of r.history) {
+        const h = (end - Date.parse(snap.at)) / 3600e3;
+        if (!(h > 0.05 && h <= 6) || snap.bid === null) continue;
+        samples.push({ h, z: snap.bid / market, y: r.finalPrice! / market });
+        used = true;
+      }
+      if (used) auctions++;
+    }
+  }
+  return { samples, auctions };
+}
+
+/** Chance (%) de o preço final ficar ≤ `limit`. null = poucos exemplos parecidos (< 12). */
+export function auctionWinChance(model: AuctionModel | undefined, bid: number, limit: number, market: number, hoursLeft: number):
+  { chance: number; estFinal: number; base: number } | null {
+  if (!model || !(market > 0) || !(hoursLeft > 0) || hoursLeft > 6) return null;
+  const b = bucketOf(hoursLeft);
+  const same = model.samples.filter((s) => bucketOf(s.h) === b);
+  const z = bid / market;
+  for (const w of [0.08, 0.12, 0.18, 0.25]) {
+    const near = same.filter((s) => Math.abs(s.z - z) <= w);
+    if (near.length >= 12) {
+      const target = limit / market;
+      const ys = near.map((s) => s.y).sort((a, c) => a - c);
+      return {
+        chance: Math.round((near.filter((s) => s.y <= target).length / near.length) * 100),
+        estFinal: Math.round(quantile(ys, 0.5) * market),
+        base: near.length,
+      };
+    }
+  }
+  return null;
+}
+
 export function computeProductStats(
   p: ProductConfig,
   records: ListingRecord[],
   runs: ProductRun[],
   now = new Date(),
   windowDays = 30,
+  auctionModel?: AuctionModel,
 ): ProductStats {
   const nowMs = now.getTime();
   const since = nowMs - windowDays * DAY;
@@ -481,6 +546,8 @@ export function computeProductStats(
       const maxBid = kind === 'auction' ? Math.max(0, Math.floor(limit - shipCost)) : null;
       const profit = r2(recommended.net - (kind === 'auction' ? limit : buyAt));
       const suspicious = kind !== 'auction' && buyAt < median * 0.45;
+      const hLeft = r.endDate ? (new Date(r.endDate).getTime() - nowMs) / 3600e3 : 0;
+      const wc = kind === 'auction' && maxBid ? auctionWinChance(auctionModel, price, maxBid, soldDist.median ?? median, hLeft) : null;
       const roi = Math.round((profit / Math.max(kind === 'auction' ? limit : buyAt, 1)) * 100);
       const minutesLeft = r.endDate ? Math.round((new Date(r.endDate).getTime() - nowMs) / 60e3) : null;
       const urgency = kind === 'auction' && minutesLeft !== null ? Math.max(0, 15 - minutesLeft / 24) : 0;
@@ -488,11 +555,14 @@ export function computeProductStats(
       let score = Math.round(Math.max(0, Math.min(100,
         Math.min(roiNow, 80) * 0.6 + (liquidity.score ?? 30) * 0.3 + confBonus + urgency + (nearby ? 4 : 0))));
       if (suspicious) score = Math.round(score * 0.4);
+      // Leilão: pesa pela chance real de ganhar dentro do limite.
+      if (wc) score = Math.round(score * (0.4 + 0.6 * (wc.chance / 100)));
       return {
         id: r.id, title: r.title, url: r.url, image: r.image ?? null, mode: r.mode, kind, price,
         shipping: r.shippingCost ?? null, pickup: !!r.pickup, city: r.city ?? null, nearby, cost, bids: r.bids,
         endDate: r.endDate, minutesLeft, discountPct: Math.round((1 - buyAt / median) * 100),
         estProfit: profit, roiPct: roi, offerPrice, maxBid, suspicious, score,
+        winChance: wc?.chance ?? null, estFinal: wc?.estFinal ?? null, chanceBase: wc?.base ?? null,
       };
     };
     for (const r of fresh) {
@@ -504,10 +574,13 @@ export function computeProductStats(
         // Vendedor aceita propostas e o preço está até 25 % acima do teto → propor o teto.
         if (r.canOffer && o.cost <= limit * 1.25) { opportunities.push(make(r, 'offer', r.buyNowPrice, limit)); continue; }
       }
-      // Leilão a terminar nas próximas 6 h com lance ainda bem abaixo do teto (margem para subir).
+      // Leilão a terminar nas próximas 6 h com lance ainda abaixo do teu lance máximo.
+      // Com dados suficientes: mostra se a chance real de acabar dentro do limite for ≥ 5 %.
+      // Sem dados (produto/época nova): regra prudente antiga, lance ≤ 85 % do teto.
       if (r.mode !== 'buynow' && r.bidPrice && endMs !== null && endMs - nowMs < 6 * 3600e3) {
         const o = make(r, 'auction', r.bidPrice, null);
-        if (o.cost <= limit * 0.85) opportunities.push(o);
+        const room = o.maxBid !== null && r.bidPrice < o.maxBid;
+        if (room && (o.winChance !== null ? o.winChance >= 5 : o.cost <= limit * 0.85)) opportunities.push(o);
       }
     }
     opportunities.sort((a, b) => b.score - a.score || b.estProfit - a.estProfit);

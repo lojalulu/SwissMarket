@@ -5,6 +5,7 @@
 //   "comprar já" = custo ≤ "comprar até" do Ricardo
 //   "negociar"   = preço até 25 % acima → propor (comprar até − viagem); em classificados negociar é normal
 //   lucro        = líquido da revenda no Ricardo (depois da comissão) − preço pago − viagem
+import { getAuctionModel } from './auction-model';
 import { activeProducts, getProduct, type ProductConfig } from '../config/products';
 import { type BuySource, type ClassifiedSeller, sellerTrust } from './classifieds';
 import { estimateDrive, maxDriveMin, osrmDrive, travelCost, type DriveInfo } from './geo';
@@ -224,7 +225,7 @@ export function productStats(productId: string, now = new Date()): ProductStats 
   if (!p) return null;
   const c = statsCache.get(productId);
   if (c && now.getTime() - c.at < 60e3) return c.s;
-  const s = computeProductStats(p, effectiveRecords(p.id), runsFor(p.id), now, 30);
+  const s = computeProductStats(p, effectiveRecords(p.id), runsFor(p.id), now, 30, getAuctionModel(now));
   statsCache.set(productId, { at: now.getTime(), s });
   return s;
 }

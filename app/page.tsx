@@ -246,6 +246,11 @@ function RadarView({ opps }: { opps: Opp[] }) {
                       {o.kind === "offer" ? <>propor {chf(o.offerPrice)} <span className="font-normal text-slate-400">(pedem {chf(o.price)})</span></>
                         : o.kind === "auction" ? <>lance {chf(o.price)} <span className="font-normal text-sky-300">→ licite até {chf(o.maxBid)}</span></> : chf(o.price)}
                     </span>
+                    {o.kind === "auction" && (o.winChance !== null
+                      ? <span className={`text-xs ${o.winChance >= 50 ? "text-emerald-300" : o.winChance >= 25 ? "text-amber-300" : "text-rose-300"}`}>
+                          chance ~{o.winChance}% de ganhar até {chf(o.maxBid)} · final previsto ~{chf(o.estFinal)} <span className="text-slate-500">({o.chanceBase} leilões parecidos)</span>
+                        </span>
+                      : <span className="text-xs text-slate-500">chance: ainda sem leilões parecidos suficientes</span>)}
                     {!o.nearby && o.shipping ? <span className="text-xs text-slate-400">+ portes {chf(o.shipping)}</span> : null}
                     <span className="text-emerald-300">{o.kind === "auction" ? "lucro mínimo" : "lucro"} ≈ {chf(o.estProfit)} ({o.roiPct}%)</span>
                     {o.resale && <span className="text-xs text-slate-500">revenda ~{chf(o.resale)}{o.basis === "pedidos" ? " (estimada pelos preços pedidos)" : ""}</span>}

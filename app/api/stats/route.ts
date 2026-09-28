@@ -1,4 +1,5 @@
 // GET /api/stats[?productId=iphone-13][&days=30] — médias, liquidez e preço máximo de compra.
+import { getAuctionModel } from '@/lib/auction-model';
 import { NextResponse } from 'next/server';
 import { activeProducts, getProduct } from '@/config/products';
 import { computeProductStats } from '@/lib/stats';
@@ -17,7 +18,8 @@ export async function GET(req: Request) {
   if (id && !products.length) return NextResponse.json({ success: false, error: 'Produto não encontrado.' }, { status: 404 });
 
   const now = new Date();
-  const stats = products.map((p) => computeProductStats(p!, effectiveRecords(p!.id), runsFor(p!.id), now, days));
+  const model = getAuctionModel(now);
+  const stats = products.map((p) => computeProductStats(p!, effectiveRecords(p!.id), runsFor(p!.id), now, days, model));
   return NextResponse.json(
     { success: true, generatedAt: now.toISOString(), windowDays: days, alerts: alertChannels(), products: stats },
     { headers: { 'Cache-Control': 'no-store' } },
