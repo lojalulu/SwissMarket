@@ -93,3 +93,42 @@ export function parseChf(raw: string | number | null | undefined): number | null
   const n = Number(cleaned);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+
+// ───────────────────────────── defeitos na descrição ─────────────────────────────
+// Termos que indicam aparelho com defeito/bloqueado (DE/FR/IT/EN), já normalizados como os títulos.
+const DEFECT_TERMS = [
+  'defekt', 'defekte', 'defektes', 'defect', 'defective', 'kaputt', 'kaputte', 'gebrochen', 'gebrochenes', 'gesprungen',
+  'zersprungen', 'sprung', 'sprunge', 'riss', 'risse', 'displayschaden', 'display schaden', 'displaybruch', 'glasbruch',
+  'spinnennetz', 'wasserschaden', 'feuchtigkeitsschaden', 'bastler', 'bastlerware', 'ersatzteil', 'ersatzteile', 'für teile',
+  'broken', 'cracked', 'crack', 'water damage', 'for parts', 'not working', 'doesnt work',
+  'casse', 'cassee', 'fissure', 'fissuré', 'ecran casse', 'ne fonctionne pas', 'ne marche pas', 'hors service', 'pour pieces',
+  'rotto', 'rotta', 'crepato', 'crepa', 'non funziona', 'guasto', 'per ricambi',
+  'funktioniert nicht', 'geht nicht', 'startet nicht', 'lädt nicht', 'ladet nicht', 'bootloop', 'kein bild', 'kein ton',
+  'icloud gesperrt', 'icloud lock', 'aktivierungssperre', 'gesperrt', 'blacklist', 'blacklisted', 'mdm',
+  'kein face id', 'ohne face id', 'face id defekt', 'face id geht nicht', 'face id funktioniert nicht', 'touch id defekt',
+  'akku defekt', 'akku kaputt', 'verbogen', 'bent', 'geht nicht an', 'ghost touch', 'burn in', 'eingebrannt', 'pixelfehler',
+];
+const NEGATIONS = new Set(['kein', 'keine', 'keinen', 'keiner', 'keines', 'ohne', 'nicht', 'nie', 'no', 'not', 'without', 'sans', 'aucun', 'aucune', 'pas', 'senza', 'nessun', 'nessuna', 'null', '0', 'zero']);
+const DEFECT_NORM = [...new Set(DEFECT_TERMS.map(normalize))].filter(Boolean);
+
+/**
+ * Procura um defeito no título/descrição. Ignora negações até 3 palavras antes:
+ * "keine Risse" · "nicht defekt" · "ohne Wasserschaden" → não é defeito.
+ * Devolve o termo encontrado (ex.: "display schaden") ou null.
+ */
+export function findDefect(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const words = normalize(text).split(' ');
+  for (const term of DEFECT_NORM) {
+    const tw = term.split(' ');
+    for (let i = 0; i + tw.length <= words.length; i++) {
+      if (!tw.every((w, j) => words[i + j] === w)) continue;
+      // termos que já contêm negação ("kein face id") contam sempre
+      if (NEGATIONS.has(tw[0])) return term;
+      const before = words.slice(Math.max(0, i - 3), i);
+      if (before.some((w) => NEGATIONS.has(w))) continue;
+      return term;
+    }
+  }
+  return null;
+}

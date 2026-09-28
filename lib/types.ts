@@ -148,4 +148,6 @@ export interface BuyRecord extends ClassifiedListing {
   seller?: ClassifiedSeller | null;
   sellerCheckedAt?: string | null;
   sellerCheckFailed?: boolean;
+  /** Defeito encontrado na descrição completa (página do anúncio). */
+  defect?: string | null;
 }

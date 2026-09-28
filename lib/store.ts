@@ -252,8 +252,10 @@ export function ingest(payload: IngestPayload): IngestResult {
   const prod = (db.products[p.id] ??= { runs: [] });
   prod.runs = [...prod.runs, { at: now, found: payload.items.length, relevant: relevantCount, complete: payload.complete }].slice(-MAX_RUNS);
 
-  closeStale(db, new Date());
-  prune(db, new Date());
+  // Relógio: o real (ou SWISSMARKET_NOW, só nos testes, para não dependerem do dia em que correm).
+  const clock = process.env.SWISSMARKET_NOW ? new Date(process.env.SWISSMARKET_NOW) : new Date();
+  closeStale(db, clock);
+  prune(db, clock);
   save(db);
 
   return {
@@ -291,8 +293,19 @@ export function recheckQueue(limit: number, now = new Date()) {
 export function closingSoon(withinMin: number, now = new Date()) {
   const db = load();
   const nowMs = now.getTime();
+  // Preço de venda típico por produto (mediana das vendas) → leilões SEM lances mas com preço inicial abaixo
+  // disso também são espreitados no fim (muitos recebem os lances só nos últimos minutos).
+  const finals = new Map<string, number[]>();
+  for (const r of Object.values(db.listings)) {
+    if (r.status === 'sold' && r.finalPrice) finals.set(r.productId, [...(finals.get(r.productId) ?? []), r.finalPrice]);
+  }
+  const typical = (pid: string) => {
+    const v = (finals.get(pid) ?? []).sort((a, b) => a - b);
+    return v.length >= 3 ? v[Math.floor(v.length / 2)] : getProduct(pid)?.priceCeil ?? Infinity;
+  };
+  const plausible = (r: ListingRecord) => r.bids > 0 || (r.bidPrice !== null && r.bidPrice > 0 && r.bidPrice <= typical(r.productId));
   return Object.values(db.listings)
-    .filter((r) => r.relevant && r.status === 'active' && r.mode !== 'buynow' && r.bids > 0 && r.endDate)
+    .filter((r) => r.relevant && r.status === 'active' && r.mode !== 'buynow' && r.endDate && plausible(r))
     .map((r) => ({ productId: r.productId, id: r.id, endDate: r.endDate!, bids: r.bids }))
     .filter((x) => { const t = new Date(x.endDate).getTime(); return t > nowMs && t - nowMs <= withinMin * 60e3; })
     .sort((a, b) => a.endDate.localeCompare(b.endDate));

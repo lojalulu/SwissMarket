@@ -11,7 +11,7 @@ import { type BuySource, type ClassifiedSeller, sellerTrust } from './classified
 import { estimateDrive, maxDriveMin, osrmDrive, travelCost, type DriveInfo } from './geo';
 import { computeProductStats, type ProductStats } from './stats';
 import { effectiveRecords, runsFor, withDb } from './store';
-import { checkRelevance } from './text';
+import { checkRelevance, findDefect } from './text';
 import type { BuyDetailResult, BuyIngestPayload, BuyRecord } from './types';
 
 const DAY = 864e5;
@@ -78,7 +78,8 @@ export function ingestBuy(payload: BuyIngestPayload, now = new Date()): BuyInges
     for (const it of payload.items) {
       if (!it?.id || !/^\d{5,}$/.test(String(it.id)) || !it.title) continue;
       const rel = checkRelevance(it.title, it.url ?? '', p);
-      const reason = rel.relevant ? priceReason(it.price, p) : rel.reason;
+      const defect = findDefect(`${it.title} ${it.description ?? ''}`);
+      const reason = !rel.relevant ? rel.reason : defect ? `defeito: ${defect}` : priceReason(it.price, p);
       if (reason) { const b = reason.replace(/\s*\(.*$/, '').replace(/:.*/, ''); reasons.set(b, (reasons.get(b) ?? 0) + 1); }
       else relevant++;
       const k = bkey(payload.source, p.id, it.id);
@@ -122,6 +123,7 @@ export function applyBuyDetails(results: BuyDetailResult[], now = new Date()) {
         if (r.failed || !r.detail) { rec.sellerCheckFailed = true; out.failed++; continue; }
         rec.sellerCheckFailed = false;
         if (r.detail.active === false) { rec.status = 'gone'; out.gone++; continue; }
+        if (r.detail.defect) { rec.defect = r.detail.defect; rec.relevant = false; rec.rejectReason = `defeito: ${r.detail.defect}`; }
         const s = r.detail.seller;
         if (s && (s.name || s.memberSince)) rec.seller = { ...(rec.seller ?? {}), ...Object.fromEntries(Object.entries(s).filter(([, v]) => v !== null)) } as ClassifiedSeller;
         rec.zip ??= r.detail.zip;
@@ -243,6 +245,7 @@ export function buyDeals(opts: { productId?: string; includeGone?: boolean; maxA
     // Regras de título atuais também para anúncios já guardados (ex.: novos termos excluídos).
     const prod = getProduct(r.productId);
     if (!prod || !checkRelevance(r.title, r.url, prod).relevant) continue;
+    if (r.defect || findDefect(`${r.title} ${r.description ?? ''}`)) continue;
     const stats = productStats(r.productId, now);
     if (!stats) continue;
     const ev = evaluateListing({ price: r.price, zip: r.zip, place: r.place }, stats);

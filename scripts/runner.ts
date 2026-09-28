@@ -30,7 +30,7 @@ import { checkRelevance } from '../lib/text';
 import { BUY_SOURCES, classifiedSearchUrl, isBuySource, parseClassifiedDetail, parseClassifiedSearch, type BuySource } from '../lib/classifieds';
 import type { BuyDetailResult, DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '3.4.0';
+const VERSION = '3.5.0';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────

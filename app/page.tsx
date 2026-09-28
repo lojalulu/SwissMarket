@@ -355,7 +355,7 @@ function ProductCard({ p, open, onToggle }: { p: ProductStats; open: boolean; on
           <div className="min-w-0">
             <h3 className="truncate font-semibold text-white">{p.name}</h3>
             <p className="text-xs text-slate-400">
-              {p.counts.active} ativos · {p.sold.n} vendas em análise · recolha {ago(p.tracking.lastRun)}
+              {p.counts.active} ativos · {p.sold.n} vendas em análise{p.sold.outliers ? ` (+${p.sold.outliers} fora da curva)` : ""} · recolha {ago(p.tracking.lastRun)}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -373,7 +373,7 @@ function ProductCard({ p, open, onToggle }: { p: ProductStats; open: boolean; on
           <Stat
             label="Vendas / 30 dias"
             value={p.liquidity.salesPer30d !== null ? String(p.liquidity.salesPer30d) : "—"}
-            sub={p.liquidity.medianDaysToSell !== null ? `~${p.liquidity.medianDaysToSell} dias p/ vender` : p.liquidity.basis === "estimada" ? `${p.active.auctionsWithBidsPct}% leilões c/ lances` : undefined}
+            sub={p.liquidity.medianDaysToSell !== null ? `Sofort vende em ~${p.liquidity.medianDaysToSell} dias` : p.liquidity.basis === "estimada" ? `${p.active.auctionsWithBidsPct}% leilões c/ lances` : undefined}
           />
         </div>
         <p className="mt-3 text-sm text-slate-300">{p.verdict}</p>

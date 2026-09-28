@@ -402,7 +402,10 @@ export function computeProductStats(
   const salesPerDay = salesCount / effDays;
   const salesPer30d = salesCount > 0 ? r2(salesPerDay * 30) : null;
   const sellThrough = closedCount ? Math.round((sold.length / closedCount) * 100) : null;
-  const daysToSell = sold.map((r) => (new Date(r.closedAt!).getTime() - new Date(r.startDate ?? r.firstSeen).getTime()) / DAY).filter((d) => d >= 0).sort((a, b) => a - b);
+  // Velocidade só de vendas a PREÇO FIXO (Sofort): num leilão, "dias até vender" é só a duração
+  // escolhida pelo vendedor (quase sempre 7 dias) e não diz nada sobre a procura.
+  const fixedSales = [...sold.filter((r) => r.soldVia === 'buynow'), ...probable];
+  const daysToSell = fixedSales.map((r) => (new Date(r.closedAt!).getTime() - new Date(r.startDate ?? r.firstSeen).getTime()) / DAY).filter((d) => d >= 0).sort((a, b) => a - b);
   const medDays = daysToSell.length ? Math.round(quantile(daysToSell, 0.5) * 10) / 10 : null;
   const supply = Math.max(competing, 1);
   const daysOfSupply = salesPerDay > 0 ? r2(supply / salesPerDay) : null;
@@ -435,8 +438,8 @@ export function computeProductStats(
       `${auctionsWithBidsPct}% dos ${auctions.length} leilões ativos têm lances (média ${avgBids}; contando no máx. 10 por leilão: ${cappedBids})`);
   }
   if (medDays !== null) {
-    add('velocidade', 'Velocidade de venda', 100 * Math.exp(-medDays / 7), 0.15, rel(daysToSell.length, 3),
-      `vendem em ~${medDays} dias (mediana)`);
+    add('velocidade', 'Velocidade (preço fixo)', 100 * Math.exp(-medDays / 7), 0.15, rel(daysToSell.length, 3),
+      `anúncios Sofort vendem em ~${medDays} dias (mediana de ${daysToSell.length})`);
   }
   if (soldDist.n >= 3 && soldDist.median) {
     // Mercado líquido = preços previsíveis. Dispersão (P75−P25)/mediana: 0 → 100 pts, ≥ 60 % → 0.
@@ -611,12 +614,25 @@ export function computeProductStats(
 
   // ── sugestões para revender
   const soldPrices = sold.map((r) => r.finalPrice!).sort((a, b) => a - b);
-  const sellBuyNow = soldPrices.length >= 5 ? Math.round(quantile(soldPrices, 0.65))
+  // Com 3+ vendas reais, o preço Sofort sugerido vem das vendas (não dos preços pedidos, que ficam acima).
+  const sellBuyNow = soldPrices.length >= 3 ? Math.round(quantile(soldPrices, 0.65))
     : asking.length >= 3 ? Math.round(dist(asking).median!) : null;
+  // Conselho de leilão baseado nos dados reais deste produto (e não só na nota de giro).
+  const low = auctionStrategy.lowStart, high = auctionStrategy.highStart;
+  let auctionTip: string;
+  if (low.n >= 3 && high.n >= 3 && low.medianFinal && high.medianFinal) {
+    auctionTip = low.medianFinal >= high.medianFinal * 0.97
+      ? `leilão a CHF 1 fecha tão bem como com preço base (mediana CHF ${Math.round(low.medianFinal)} vs ${Math.round(high.medianFinal)}) e tem 10 % de desconto na comissão`
+      : `leilão com preço base fecha melhor (mediana CHF ${Math.round(high.medianFinal)} vs ${Math.round(low.medianFinal)} a CHF 1)`;
+  } else if (closedCount >= 5 && sellThrough !== null && sellThrough >= 70) {
+    auctionTip = `leilão também funciona: ${sold.length} de ${closedCount} leilões terminados venderam${low.n < 3 ? ' (a CHF 1 ainda sem dados suficientes)' : ''}`;
+  } else if (closedCount >= 5 && sellThrough !== null) {
+    auctionTip = `leilão arriscado: só ${sellThrough} % dos leilões venderam — prefira preço fixo com "aceita propostas"`;
+  } else {
+    auctionTip = 'ainda poucos leilões terminados para aconselhar sobre leilão';
+  }
   const sellNote = !sellBuyNow ? 'Sem dados suficientes para sugerir preço de venda.'
-    : liquidity.label === 'rapido'
-      ? `Sofort kaufen a ~CHF ${sellBuyNow}, ou leilão a partir de CHF 1 (10 % de desconto na comissão) — há procura suficiente.`
-      : `Sofort kaufen a ~CHF ${sellBuyNow} com "aceita propostas"; evite leilão a CHF 1 (pouca procura).`;
+    : `Sofort kaufen a ~CHF ${sellBuyNow} (${soldPrices.length >= 3 ? 'pelas vendas reais' : 'pelos preços pedidos'}); ${auctionTip}.`;
   const bestEndSlots = endSlots(sold.filter((r) => r.soldVia === 'auction'));
 
   // ── série semanal (8 semanas) de preços vendidos

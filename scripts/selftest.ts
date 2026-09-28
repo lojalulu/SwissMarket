@@ -189,6 +189,7 @@ async function main() {
   });
 
   console.log('\nbase de dados (ingest → verificação → estatística)');
+  process.env.SWISSMARKET_NOW = '2026-09-26T12:00:00Z'; // relógio fixo: estes testes usam datas de 25/09
   await test('ingest guarda relevantes e rejeita o resto com motivo', () => {
     const r = store.ingest({ productId: 'iphone-13', searchTerm: 'iphone 13 128gb', scrapedAt: now.toISOString(), items: page.items, complete: true });
     assert.equal(r.received, 9);
@@ -245,6 +246,7 @@ async function main() {
     console.log(`    → média ${s.sold.mean} · mediana ${s.sold.median} · revenda rápida ${s.pricing.resaleQuick} · comprar até ${s.pricing.recommended!.maxBuy} · liquidez ${s.liquidity.label} (${s.liquidity.score})`);
   });
 
+  delete process.env.SWISSMARKET_NOW; // daqui em diante os testes usam o relógio real (Date.now)
   await test('leilão visto ~10 min antes do fim → vendido (inferido) ao último lance', () => {
     const endMs = Date.now() - 40 * 60e3;
     const seen = new Date(endMs - 10 * 60e3).toISOString();
@@ -287,6 +289,7 @@ async function main() {
     assert.equal(still.status, 'active');
   });
 
+  delete process.env.SWISSMARKET_NOW;
   console.log('\nradar e alertas');
   await test('extras do Ricardo: portes, retirada, cidade, foto, propostas', () => {
     const b = rb['1330575112'];
@@ -533,6 +536,50 @@ async function main() {
     assert.equal(computeProductStats(iphone, [...sold, live], runs, t, 30, fakeLow).opportunities.find((x) => x.id === 'live'), undefined, 'chance 0 % → não aparece');
   });
 
+  await test('auditoria: velocidade só de vendas a preço fixo; conselho de revenda pelas vendas reais', () => {
+    const t = new Date('2026-09-28T12:00:00Z');
+    const mk = (id: string, o: Partial<import('../lib/types').ListingRecord>): import('../lib/types').ListingRecord => ({
+      id, productId: 'iphone-13', title: `iPhone 13 ${id}`, url: `https://www.ricardo.ch/de/a/x-${id}/`, mode: 'auction',
+      bidPrice: null, buyNowPrice: null, bids: 0, endDate: '2026-10-05T10:00:00Z', condition: null, relevant: true,
+      firstSeen: '2026-09-20T10:00:00Z', lastSeen: t.toISOString(), seenCount: 3, history: [], status: 'active',
+      finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null, ...o,
+    });
+    // 4 leilões vendidos (duração de 7 dias) + Sofort pedidos caros
+    const sold = [300, 305, 310, 315].map((v, i) => mk(`s${i}`, { status: 'sold', finalPrice: v, soldVia: 'auction', soldEvidence: 'inferred', bids: 9,
+      startDate: `2026-09-1${5 + i}T19:00:00Z`, closedAt: `2026-09-2${2 + i}T19:00:00Z`, endDate: `2026-09-2${2 + i}T19:00:00Z` }));
+    const asks = [440, 450, 460].map((v, i) => mk(`b${i}`, { mode: 'buynow', buyNowPrice: v }));
+    const runs = [{ at: '2026-09-20T10:00:00Z', found: 60, relevant: 40, complete: true }, { at: t.toISOString(), found: 60, relevant: 40, complete: true }];
+    const st = computeProductStats(iphone, [...sold, ...asks], runs, t, 30);
+    assert.equal(st.liquidity.medianDaysToSell, null, 'leilões de 7 dias não medem velocidade');
+    assert.equal(st.liquidity.components.find((c) => c.key === 'velocidade'), undefined);
+    assert.ok(st.sell.buyNowPrice! < 330, `Sofort sugerido pelas vendas: ${st.sell.buyNowPrice}`);
+    assert.match(st.sell.note, /pelas vendas reais/);
+    // Sofort vendido (provável) em 2 dias → conta
+    const gone = mk('g1', { mode: 'buynow', buyNowPrice: 320, status: 'gone', startDate: '2026-09-25T10:00:00Z', closedAt: '2026-09-27T10:00:00Z' });
+    const st2 = computeProductStats(iphone, [...sold, ...asks, gone], runs, t, 30);
+    assert.equal(st2.liquidity.medianDaysToSell, 2);
+  });
+  await test('espreitar o fim: leilão SEM lances com preço inicial realista também é visto', () => {
+    const t = new Date('2026-09-28T12:00:00Z');
+    const base = { productId: 'iphone-13', url: 'u', mode: 'auction', buyNowPrice: null, condition: null, relevant: true, firstSeen: '', lastSeen: '', seenCount: 1, history: [],
+      status: 'active', finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null, endDate: new Date(t.getTime() + 60 * 60e3).toISOString() };
+    const db = store.withDb((d) => d, false);
+    db.listings['iphone-13:1398000001'] = { ...base, id: '1398000001', title: 'a', bidPrice: 1, bids: 0 } as any;       // CHF 1, sem lances → ver
+    db.listings['iphone-13:1398000002'] = { ...base, id: '1398000002', title: 'b', bidPrice: 5000, bids: 0 } as any;    // preço absurdo → não
+    const ids = store.closingSoon(120, t).map((x) => x.id);
+    assert.ok(ids.includes('1398000001'));
+    assert.ok(!ids.includes('1398000002'));
+  });
+  await test('defeitos na descrição: "Display kaputt" ✘ · "keine Risse" ✔ · "nicht defekt" ✔', () => {
+    const { findDefect } = require('../lib/text') as typeof import('../lib/text');
+    for (const t of ['iPhone 15 Pro Display kaputt', 'Face ID funktioniert nicht', 'Rückseite gebrochen, sonst ok', 'Glas hat einen Riss', 'iCloud gesperrt',
+      'écran cassé', 'schermo rotto', 'kein Face ID', 'Displayschaden unten links', 'screen cracked'])
+      assert.ok(findDefect(t), `devia detetar: ${t}`);
+    for (const t of ['Wie neu, keine Kratzer, keine Dellen, keine Risse', 'nicht defekt, funktioniert einwandfrei', 'ohne Wasserschaden', 'Akku 91%, top Zustand',
+      'Ursprungsland Schweiz', 'keine sichtbaren Risse'])
+      assert.equal(findDefect(t), null, `não devia detetar: ${t}`);
+  });
+
   console.log('\nTutti / Anibis (lado da compra)');
   const { parseClassifiedSearch, parseClassifiedDetail, sellerTrust, parsePosted } = await import('../lib/classifieds');
   const geo = await import('../lib/geo');
@@ -567,6 +614,16 @@ async function main() {
     assert.equal(by['83207500'].price, 549, 'NP 1\'199.- na descrição não conta');
     assert.equal(by['83207500'].postedAt, '2026-09-28T07:52:00.000Z');
     assert.equal(by['83208698'].image, 'https://c.tutti.ch/thumbnail/83208698.jpg');
+  });
+  await test('Tutti: descrição do card lida; anúncio com defeito na descrição é rejeitado', () => {
+    const r = parseClassifiedSearch(fx('tutti-search-real.html'), 'tutti', t0);
+    const a = r.items.find((i) => i.id === '83208698')!;
+    assert.match(a.description ?? '', /keine Risse/);
+    const withDefect = r.items.map((i) => (i.id === '83207500' ? { ...i, description: 'Display hat einen Sprung, sonst top' } : i));
+    const res = buy.ingestBuy({ source: 'tutti', productId: 'iphone-15-pro', scrapedAt: t0.toISOString(), items: withDefect }, t0);
+    assert.ok(res.rejected.some((x) => x.reason === 'defeito'), JSON.stringify(res.rejected));
+    assert.ok(parseClassifiedDetail('1', '<h1>iPhone 15 Pro</h1><p>Leider Face ID funktioniert nicht mehr.</p>').defect);
+    assert.equal(parseClassifiedDetail('1', '<h1>iPhone 15 Pro</h1><p>Keine Kratzer, nicht defekt.</p>').defect, null);
   });
   await test('JSON do Tutti (__NEXT_DATA__) e ignora anúncio que não está na página', () => {
     const r = parseClassifiedSearch(fx('tutti-search-json.html'), 'tutti', t0);

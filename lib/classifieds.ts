@@ -7,7 +7,7 @@
 //   1. JSON embutido (Next.js __NEXT_DATA__ / cache Apollo): objetos com listingID + title + preço + código postal
 //   2. HTML dos cards (plano B): link /de/vi/<id>, "Localidade, 3600, Heute 10:54", "590.-"
 import { decodeEntities, htmlToText, zurichToIso } from './parse';
-import { parseChf } from './text';
+import { findDefect, parseChf } from './text';
 
 export type BuySource = 'tutti' | 'anibis';
 
@@ -59,6 +59,8 @@ export interface ClassifiedDetail {
   id: string;
   /** false = anúncio já não existe (vendido/apagado). */
   active: boolean | null;
+  /** Defeito encontrado na descrição completa (ex.: "display schaden"), ou null. */
+  defect?: string | null;
   price: number | null;
   zip: string | null;
   place: string | null;
@@ -182,18 +184,21 @@ const LOC_CHUNK = /^([A-Za-zÀ-ÿ.'’\-\/() ]{2,40}),\s*([1-9]\d{3})(?:,\s*(.{3
  * Pára no início do card seguinte (outro "Local, 1234, data"), porque o Tutti mete anúncios do Ricardo
  * ("auf Ricardo", sem link /vi/) entre os seus — e esses têm preços próprios (lance, Sofortkauf).
  */
-function cardFields(chunks: string[]): { price: number | null; zip: string | null; place: string | null; when: string | null } {
+function cardFields(chunks: string[], title = ''): { price: number | null; zip: string | null; place: string | null; when: string | null; description: string | null } {
   const li = chunks.findIndex((c) => LOC_CHUNK.test(c));
   const loc = li >= 0 ? chunks[li].match(LOC_CHUNK) : null;
   let price: number | null = null;
+  const desc: string[] = [];
   for (let i = li >= 0 ? li + 1 : 0; i < chunks.length; i++) {
     const c = chunks[i];
     if (i > li && LOC_CHUNK.test(c)) break; // próximo card
     if (FREE_CHUNK.test(c)) break;
     const m = c.match(PRICE_CHUNK);
     if (m) { price = parseChf(m[1] ?? m[2]); break; }
+    // Entre o título e o preço fica a descrição (curta) do card.
+    if (c !== title && !/^\d{1,2}$/.test(c)) desc.push(c);
   }
-  return { price, zip: loc?.[2] ?? null, place: loc?.[1]?.trim() ?? null, when: loc?.[3] ?? null };
+  return { price, zip: loc?.[2] ?? null, place: loc?.[1]?.trim() ?? null, when: loc?.[3] ?? null, description: desc.join(' ').slice(0, 500) || null };
 }
 
 function parseCards(html: string, source: BuySource, now: Date): Map<string, ClassifiedListing> {
@@ -216,7 +221,7 @@ function parseCards(html: string, source: BuySource, now: Date): Map<string, Cla
     const alt = seg.match(/<img[^>]*alt="([^"]{3,})"/i)?.[1];
     const title = [...titles, ...(alt ? [decodeEntities(alt)] : [])].sort((a, b) => a.length - b.length)[0];
     if (!title) continue;
-    const f = cardFields(text.split(' | ').map((c) => c.trim()).filter(Boolean));
+    const f = cardFields(text.split(' | ').map((c) => c.trim()).filter(Boolean), title);
     const href = links.find((l) => l.id === id)!.href;
     const img = seg.match(/<img[^>]*src="(https?:[^"]+)"/i)?.[1] ?? null;
     out.set(id, {
@@ -227,6 +232,7 @@ function parseCards(html: string, source: BuySource, now: Date): Map<string, Cla
       place: f.place,
       postedAt: f.when ? parsePosted(f.when, now) : null,
       image: img ? decodeEntities(img) : null,
+      description: f.description,
       from: 'html',
     });
   }
@@ -292,6 +298,15 @@ export function parseClassifiedDetail(id: string, html: string, status = 200): C
   }
 
   const text = htmlToText(html);
+  // Descrição completa: do título (h1) até ao bloco de anúncios semelhantes/vendedor (máx. 3000 caracteres).
+  let body: string | null = null;
+  for (const block of jsonBlocks(html)) walk(block, (o) => { const l = listingFromJson(o, 'tutti'); if (l && l.id === id && l.description && !body) body = l.description; });
+  const h1 = htmlToText(html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? '').trim();
+  const start = h1 ? text.indexOf(h1) : -1;
+  let windowText = start >= 0 ? text.slice(start, start + 3000) : '';
+  const stop = windowText.search(/Ähnliche Inserate|Weitere Inserate|Das könnte dich|Annonces similaires|Annunci simili|Mitglied seit|Anbieter/i);
+  if (stop > 0) windowText = windowText.slice(0, stop);
+  const defect = findDefect(`${body ?? ''} ${windowText}`);
   if (/(Inserat|Anzeige) (ist )?(nicht mehr (verfügbar|aktiv|online)|wurde (gelöscht|entfernt|deaktiviert))|n'est plus disponible|non è più disponibile/i.test(text)) {
     return { id, active: false, price, zip, place, seller };
   }
@@ -311,7 +326,7 @@ export function parseClassifiedDetail(id: string, html: string, status = 200): C
     const loc = text.match(/\b([1-9]\d{3})\s+([A-ZÀ-ÿ][A-Za-zÀ-ÿ.'’\-\/() ]{1,30})/);
     if (loc) { zip = loc[1]; place = loc[2].trim(); }
   }
-  return { id, active: true, price, zip, place, seller };
+  return { id, active: true, price, zip, place, seller, defect };
 }
 
 /** Classificação de confiança no vendedor (a regra do Lucas: só perfis visíveis). */
