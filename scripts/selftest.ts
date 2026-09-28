@@ -414,6 +414,125 @@ async function main() {
     console.log(`    → tendência ${st.trend!.pctPerWeek}%/sem, desconto ${st.trend!.appliedCHF} CHF, potencial ${st.potential!.expectedProfit7d}/sem`);
   });
 
+  console.log('\nTutti / Anibis (lado da compra)');
+  const { parseClassifiedSearch, parseClassifiedDetail, sellerTrust, parsePosted } = await import('../lib/classifieds');
+  const geo = await import('../lib/geo');
+  const buy = await import('../lib/buy');
+  const t0 = new Date('2026-09-28T09:30:00Z');
+
+  await test('cards do Tutti: título, preço "590.-", local e código postal, data "Heute 10:54"', () => {
+    const r = parseClassifiedSearch(fx('tutti-search-cards.html'), 'tutti', t0);
+    const by = Object.fromEntries(r.items.map((i) => [i.id, i]));
+    assert.equal(r.items.length, 6);
+    assert.equal(by['83200001'].title, 'iPhone 15 Pro 128GB Blau');
+    assert.equal(by['83200001'].price, 520);                 // não confunde com "NP 1'199.-" da descrição? (último preço do card)
+    assert.equal(by['83200001'].zip, '3600');
+    assert.equal(by['83200001'].place, 'Thun');
+    assert.equal(by['83200001'].postedAt, '2026-09-28T08:54:00.000Z'); // 10:54 em Zurique (CEST)
+    assert.equal(by['83200001'].image, 'https://c.tutti.ch/images/83200001.jpg');
+    assert.equal(by['83200004'].price, 1050);
+    assert.equal(by['83200003'].postedAt, '2026-09-27T16:03:00.000Z');
+    assert.equal(by['83200006'].price, null);                 // Gratis
+    assert.equal(by['83200001'].url, 'https://www.tutti.ch/de/vi/bern/handys/iphone-15-pro-128gb-blau/83200001');
+  });
+  await test('JSON do Tutti (__NEXT_DATA__) e ignora anúncio que não está na página', () => {
+    const r = parseClassifiedSearch(fx('tutti-search-json.html'), 'tutti', t0);
+    assert.equal(r.items.length, 2);
+    const a = r.items.find((i) => i.id === '83300001')!;
+    assert.equal(a.price, 540); assert.equal(a.zip, '3700'); assert.equal(a.place, 'Spiez');
+    assert.equal(a.sellerName, 'Sandra'); assert.equal(a.postedAt, '2026-09-28T08:12:00.000Z');
+    assert.equal(a.image, 'https://c.tutti.ch/big/83300001.jpg');
+  });
+  await test('página do anúncio: vendedor visível; anúncio apagado', () => {
+    const d = parseClassifiedDetail('83200001', fx('tutti-detail.html'));
+    assert.equal(d.active, true);
+    assert.equal(d.seller.name, 'Marco R.');
+    assert.equal(d.seller.memberSince, '2019');
+    assert.equal(d.seller.listings, 12);
+    assert.equal(d.seller.verified, true);
+    assert.equal(sellerTrust(d.seller), 'visivel');
+    assert.equal(parseClassifiedDetail('1', fx('tutti-detail-gone.html')).active, false);
+    assert.equal(parseClassifiedDetail('1', '', 404).active, false);
+    assert.equal(sellerTrust({ name: null, memberSince: null, company: null, verified: null, listings: null }), 'desconhecido');
+    assert.ok(parsePosted('vor 5 Minuten', t0));
+  });
+  await test('carro a partir de Bern: raio de 40 min e "no caminho" para Interlaken', () => {
+    assert.equal(geo.findZip('Thun'), '3600');
+    assert.equal(geo.findZip('3700 Spiez'), '3700');
+    assert.match(geo.findZip('Biel/Bienne') ?? '', /^25/);
+    const thun = geo.estimateDrive('3600')!, zurich = geo.estimateDrive('8004')!, fri = geo.estimateDrive('1700')!;
+    assert.ok(thun.minutes >= 20 && thun.minutes <= 35, `Thun ${thun.minutes}`);
+    assert.ok(thun.detourMin! <= 10, `Thun desvio ${thun.detourMin}`);
+    assert.ok(zurich.minutes > 60);
+    assert.ok(fri.minutes <= 40 && fri.detourMin! > 30, 'Fribourg: perto de casa mas fora do caminho');
+    assert.equal(geo.travelCost(thun).mode, 'caminho');
+    assert.equal(geo.travelCost(fri).mode, 'ida');
+    assert.ok(geo.travelCost(fri).chf >= 10 && geo.travelCost(fri).chf <= 25);
+  });
+  await test('Tutti → Ricardo: comprar, negociar, fora do raio, vendedor e alertas', async () => {
+    // 10 vendas reais do iPhone 15 Pro no Ricardo (CHF 600–690)
+    const base = Date.now() - 6 * 864e5;
+    const items = Array.from({ length: 10 }, (_, i) => ({
+      id: String(1350000000 + i), title: `iPhone 15 Pro 128GB Nr ${i}`, url: `https://www.ricardo.ch/de/a/iphone-15-pro-128gb-${1350000000 + i}/`,
+      mode: 'auction' as const, bidPrice: 600 + i * 10, buyNowPrice: null, bids: 9, endDate: new Date(base + i * 36e5).toISOString(), condition: null, source: 'test',
+    }));
+    store.ingest({ productId: 'iphone-15-pro', searchTerm: 'x', scrapedAt: new Date(base - 864e5).toISOString(), items, complete: false });
+    store.applyDetails(items.map((it) => ({ id: it.id, productId: 'iphone-15-pro', removed: false, ended: true, soldMarker: false, bids: 9,
+      currentPrice: it.bidPrice, buyNowPrice: null, condition: null, endDate: it.endDate })), new Date(base + 2 * 864e5));
+    const now = new Date();
+    const stats = buy.productStats('iphone-15-pro', now)!;
+    const maxBuy = stats.pricing.recommended!.maxBuy!;
+    assert.ok(maxBuy > 400 && maxBuy < 520, `maxBuy ${maxBuy}`);
+
+    const cheap = buy.evaluateListing({ price: maxBuy - 40, zip: '3600' }, stats)!;
+    assert.equal(cheap.kind, 'comprar');
+    assert.equal(cheap.onRoute, true);
+    assert.ok(cheap.profit >= 40);
+    const nego = buy.evaluateListing({ price: maxBuy + 50, zip: '3700' }, stats)!;
+    assert.equal(nego.kind, 'negociar');
+    assert.ok(nego.offer! <= maxBuy && nego.offer! >= (maxBuy + 50) * 0.75);
+    const no = buy.evaluateListing({ price: maxBuy * 1.6, zip: '3600' }, stats)!;
+    assert.equal(no.kind, 'nao');
+    const far = buy.evaluateListing({ price: maxBuy - 60, zip: '1700' }, stats)!;
+    assert.ok(far.travel!.chf > cheap.travel!.chf, 'viagem de propósito custa mais que o desvio no caminho');
+    const bait = buy.evaluateListing({ price: 150, zip: '3600' }, stats)!;
+    assert.equal(bait.suspicious, true);
+
+    // Fluxo completo: pesquisa → oportunidades → verificar vendedor → aplicar
+    const listing = parseClassifiedSearch(fx('tutti-search-cards.html'), 'tutti', now).items
+      .map((i) => (i.id === '83200001' ? { ...i, price: maxBuy - 30 } : i));
+    const r = buy.ingestBuy({ source: 'tutti', productId: 'iphone-15-pro', scrapedAt: now.toISOString(), items: listing }, now);
+    assert.ok(r.rejected.some((x) => /excluído|acessório|sem preço/.test(x.reason)), JSON.stringify(r.rejected));
+    const deals = buy.buyDeals({ productId: 'iphone-15-pro' }, now);
+    const d1 = deals.find((d) => d.id === '83200001')!;
+    assert.equal(d1.kind, 'comprar');
+    assert.equal(d1.withinRadius, true);
+    assert.equal(deals.find((d) => d.id === '83200002'), undefined, 'capa (Hülle) não é oportunidade');
+    const z = deals.find((d) => d.id === '83200003');
+    if (z) assert.equal(z.withinRadius, false, 'Zürich fica fora dos 40 min');
+    const need = buy.needSellerCheck('tutti', 'iphone-15-pro', 6, now);
+    assert.ok(need.some((n) => n.id === '83200001'));
+    assert.ok(!need.some((n) => n.id === '83200003'), 'fora do raio não gasta tempo a abrir');
+    buy.applyBuyDetails([{ source: 'tutti', id: '83200001', detail: parseClassifiedDetail('83200001', fx('tutti-detail.html')) }], now);
+    const after = buy.buyDeals({ productId: 'iphone-15-pro' }, now).find((d) => d.id === '83200001')!;
+    assert.equal(after.trust, 'visivel');
+    assert.equal(after.sellerChecked, true);
+    assert.ok(!buy.needSellerCheck('tutti', 'iphone-15-pro', 6, now).some((n) => n.id === '83200001'));
+    const { formatBuyAlert } = await import('../lib/alerts');
+    const msg = formatBuyAlert(after);
+    assert.match(msg.title, /Tutti: iPhone 15 Pro/);
+    assert.match(msg.body, /Marco R\. · membro desde 2019/);
+    assert.match(msg.body, /no caminho do trabalho/);
+    // anúncio apagado → sai das oportunidades
+    buy.applyBuyDetails([{ source: 'tutti', id: '83200005', detail: parseClassifiedDetail('83200005', fx('tutti-detail-gone.html')) }], now);
+    assert.equal(buy.buyDeals({ productId: 'iphone-15-pro' }, now).find((d) => d.id === '83200005'), undefined);
+    // avaliação manual (Facebook): descobre o produto pelo título
+    const m = buy.evaluateManual({ title: 'Apple iPhone 15 Pro 128 GB Titan Blau', price: maxBuy - 20, zip: geo.findZip('Belp') }, now);
+    assert.equal(m[0].productId, 'iphone-15-pro');
+    assert.equal(m[0].result!.kind, 'comprar');
+    console.log(`    → comprar até ${maxBuy} · Thun ${cheap.drive!.minutes} min (desvio ${cheap.drive!.detourMin}) · Fribourg viagem CHF ${far.travel!.chf}`);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${process.exitCode ? '❌ Falhas encontradas' : `✅ ${passed} testes OK`}\n`);
 }

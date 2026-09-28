@@ -9,6 +9,10 @@
 //   npx tsx scripts/runner.ts --dry-run           # não envia nada para a VPS
 //   npx tsx scripts/runner.ts --recheck           # tenta abrir anúncios terminados (a Cloudflare costuma bloquear)
 //   npx tsx scripts/runner.ts --no-closing        # não espreita leilões antes do fim entre ciclos
+//   npx tsx scripts/runner.ts --no-buy            # não procura no Tutti/Anibis
+//   npx tsx scripts/runner.ts --buy-only          # só Tutti/Anibis (sem Ricardo)
+//   npx tsx scripts/runner.ts --inspect "tutti:iphone 15 pro"      # diagnóstico de uma pesquisa no Tutti
+//   npx tsx scripts/runner.ts --inspect https://www.tutti.ch/de/vi/12345678   # diagnóstico de um anúncio Tutti
 //
 // Configuração: ficheiro .env na raiz (ver .env.example) ou variáveis de ambiente.
 //
@@ -23,9 +27,10 @@ import puppeteer, { type Browser, type HTTPResponse, type Page } from 'puppeteer
 import { activeProducts, getProduct, type ProductConfig } from '../config/products';
 import { isChallengePage, parseDetailPage, parseRscText, parseSearchPage, searchUrl } from '../lib/parse';
 import { checkRelevance } from '../lib/text';
-import type { DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
+import { BUY_SOURCES, classifiedSearchUrl, isBuySource, parseClassifiedDetail, parseClassifiedSearch, type BuySource } from '../lib/classifieds';
+import type { BuyDetailResult, DetailSignals, IngestPayload, ScrapedListing } from '../lib/types';
 
-const VERSION = '3.3.0';
+const VERSION = '3.4.0';
 const ROOT = path.resolve(__dirname, '..');
 
 // ───────────────────────────── configuração ─────────────────────────────
@@ -65,6 +70,10 @@ const CFG = {
   // Quantos minutos antes do fim fazer a leitura final (o Chromium do telemóvel precisa de ~30 s).
   closingLeadMs: Number(process.env.CLOSING_LEAD_MIN || 4) * 60e3,
   inspect: opt('inspect'),
+  // Lado da compra (Tutti/Anibis): as fontes e os produtos vêm da VPS (BUY_SOURCES no .env da VPS).
+  buy: !flag('no-buy'),
+  buyOnly: flag('buy-only'),
+  buyDetailsMax: Number(process.env.BUY_DETAILS_MAX || 8),
   debugDir: path.join(ROOT, 'data', 'debug'),
   // Perfil antigo (v2.0.1) — apagado ao arrancar: um perfil reutilizado era MAIS bloqueado.
   oldProfileDir: path.join(ROOT, 'data', 'chrome-profile'),
@@ -168,7 +177,8 @@ class BrowserSession {
 
 type LoadResult = { html: string; status: number; finalUrl: string; challenge: boolean };
 
-async function load(session: BrowserSession, url: string, waitForCards: boolean): Promise<LoadResult> {
+// waitForCards: true = cards do Ricardo; string = seletor CSS a esperar (ex.: cards do Tutti).
+async function load(session: BrowserSession, url: string, waitForCards: boolean | string): Promise<LoadResult> {
   const page = await session.getPage();
   let resp: HTTPResponse | null = null;
   resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: CFG.navTimeout });
@@ -194,7 +204,7 @@ async function load(session: BrowserSession, url: string, waitForCards: boolean)
 
   await session.acceptCookies(page);
   if (waitForCards) {
-    await page.waitForSelector('a[href*="/a/"]', { timeout: 15_000 }).catch(() => {});
+    await page.waitForSelector(typeof waitForCards === 'string' ? waitForCards : 'a[href*="/a/"]', { timeout: 15_000 }).catch(() => {});
     // Scroll em passos para disparar lazy-loading dos cards.
     await page.evaluate(async () => {
       for (let y = 0; y < document.body.scrollHeight; y += 700) { window.scrollTo(0, y); await new Promise((r) => setTimeout(r, 150)); }
@@ -235,7 +245,10 @@ async function api<T>(method: 'GET' | 'POST', p: string, body?: unknown, attempt
   throw lastErr;
 }
 
-function queueOffline(kind: 'ingest' | 'details', body: unknown) {
+type OutboxKind = 'ingest' | 'details' | 'buy' | 'buy-details';
+const OUTBOX_PATH: Record<OutboxKind, string> = { ingest: '/api/ingest', details: '/api/ingest/details', buy: '/api/ingest/buy', 'buy-details': '/api/ingest/buy-details' };
+
+function queueOffline(kind: OutboxKind, body: unknown) {
   fs.mkdirSync(CFG.outboxDir, { recursive: true });
   const f = path.join(CFG.outboxDir, `${Date.now()}-${kind}.json`);
   fs.writeFileSync(f, JSON.stringify({ kind, body }));
@@ -251,7 +264,7 @@ async function flushOutbox() {
     const full = path.join(CFG.outboxDir, f);
     try {
       const { kind, body } = JSON.parse(fs.readFileSync(full, 'utf8'));
-      await api('POST', kind === 'ingest' ? '/api/ingest' : '/api/ingest/details', body, 2);
+      await api('POST', OUTBOX_PATH[kind as OutboxKind] ?? '/api/ingest', body, 2);
       fs.unlinkSync(full);
     } catch (e) {
       warn(`Ainda sem ligação à VPS (${(e as Error).message}). Fica para o próximo ciclo.`);
@@ -460,11 +473,151 @@ async function recheckPhase(session: BrowserSession) {
   await flush();
 }
 
+// ───────────────────────────── Tutti / Anibis (lado da compra) ─────────────────────────────
+//
+// Para cada produto que já tem "comprar até" no Ricardo, lê a 1ª página de resultados (os mais recentes)
+// no Tutti/Anibis e envia para a VPS. A VPS responde com os anúncios promissores (dentro do raio de carro)
+// cujo vendedor deve ser verificado: o runner abre esses anúncios (/de/vi/…, permitido no robots.txt).
+
+type BuyTargets = { sources: BuySource[]; products: { id: string; name: string; terms: string[]; maxBuy: number }[] };
+const TUTTI_CARDS = 'a[href*="/vi/"]';
+
+async function scrapeClassified(session: BrowserSession, source: BuySource, term: string) {
+  const url = classifiedSearchUrl(source, term);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await load(session, url, TUTTI_CARDS);
+      if (res.challenge) {
+        consecutiveBlocks++;
+        warn(`${BUY_SOURCES[source].label}: bloqueado (tentativa ${attempt}).`);
+        await session.close();
+        await sleep(jitter(15_000 * attempt));
+        continue;
+      }
+      consecutiveBlocks = 0;
+      const parsed = parseClassifiedSearch(res.html, source);
+      if (!parsed.items.length) {
+        fs.mkdirSync(CFG.debugDir, { recursive: true });
+        const f = path.join(CFG.debugDir, `vazio-${source}-${term.replace(/\W+/g, '_')}.html`);
+        fs.writeFileSync(f, res.html);
+        warn(`${BUY_SOURCES[source].label}: 0 anúncios lidos (HTTP ${res.status}). HTML em ${path.relative(ROOT, f)}.`);
+        return { items: [], ok: false };
+      }
+      return { items: parsed.items, ok: true, sources: parsed.sources };
+    } catch (e) {
+      warn(`${BUY_SOURCES[source].label}: erro em "${term}" (${(e as Error).message})`);
+      await session.close();
+      await sleep(jitter(10_000));
+    }
+  }
+  return { items: [], ok: false };
+}
+
+async function checkSellers(session: BrowserSession, list: { source: BuySource; id: string; url: string }[]) {
+  const results: BuyDetailResult[] = [];
+  for (const it of list.slice(0, CFG.buyDetailsMax)) {
+    await sleep(jitter(CFG.delayMs * 0.7));
+    try {
+      const res = await load(session, it.url, false);
+      if (res.challenge) { results.push({ source: it.source, id: it.id, detail: null, failed: true }); await session.close(); continue; }
+      const d = parseClassifiedDetail(it.id, res.html, res.status);
+      const s = d.seller;
+      log(`   👤 ${it.id}: ${d.active === false ? 'já não existe' : `${s.name ?? '?'} · desde ${s.memberSince ?? '?'}${s.verified ? ' · verificado' : ''}${s.company ? ' · empresa' : ''}`}`);
+      if (d.active !== false && !s.name && !s.memberSince) {
+        fs.mkdirSync(CFG.debugDir, { recursive: true });
+        fs.writeFileSync(path.join(CFG.debugDir, `vendedor-${it.source}-${it.id}.html`), res.html);
+      }
+      results.push({ source: it.source, id: it.id, detail: d });
+    } catch (e) {
+      warn(`Falha ao abrir ${it.url}: ${(e as Error).message}`);
+      results.push({ source: it.source, id: it.id, detail: null, failed: true });
+      await session.close();
+    }
+  }
+  if (!results.length) return;
+  try {
+    const r = await api<{ applied: number; gone: number; alerts?: number }>('POST', '/api/ingest/buy-details', { results });
+    log(`   ✅ VPS: ${r.applied} perfis atualizados${r.gone ? ` · ${r.gone} já vendidos/apagados` : ''}${r.alerts && r.alerts > 0 ? ` · 🔔 ${r.alerts} alerta(s)` : ''}`);
+  } catch (e) {
+    if ((e as any)?.fatal) throw e;
+    queueOffline('buy-details', { results });
+  }
+}
+
+async function buyPhase(stopped: () => boolean = () => false) {
+  let targets: BuyTargets;
+  try { targets = await api<BuyTargets>('GET', '/api/buy/targets'); }
+  catch (e) {
+    if ((e as any)?.fatal) throw e;
+    warn(`Tutti/Anibis: sem lista de produtos (${(e as Error).message}). A VPS já foi atualizada (git pull)?`);
+    return;
+  }
+  const products = CFG.only.length ? targets.products.filter((p) => CFG.only.includes(p.id)) : targets.products;
+  if (!targets.sources.length || !products.length) { log('🛒 Tutti/Anibis: nada a procurar (ainda sem "comprar até" nos produtos).'); return; }
+  log(`🛒 Compra: ${products.length} produtos em ${targets.sources.map((s) => BUY_SOURCES[s].label).join(' + ')}`);
+  const session = new BrowserSession();
+  let deals = 0;
+  try {
+    for (const source of targets.sources) {
+      for (const p of products) {
+        if (stopped()) return;
+        if (consecutiveBlocks >= 3) { warn(`${BUY_SOURCES[source].label}: 3 bloqueios seguidos — fica para o próximo ciclo.`); consecutiveBlocks = 0; break; }
+        for (const term of p.terms) {
+          log(`🛒 ${BUY_SOURCES[source].label} · ${p.name} — "${term}" (comprar até CHF ${p.maxBuy})`);
+          const { items, ok } = await scrapeClassified(session, source, term);
+          if (!ok || !items.length) { await sleep(jitter(CFG.delayMs)); continue; }
+          const payload = { source, productId: p.id, scrapedAt: new Date().toISOString(), items, runnerVersion: VERSION };
+          if (CFG.dryRun) {
+            for (const it of items.slice(0, 5)) log(`     · ${it.title.slice(0, 50)} | CHF ${it.price ?? '—'} | ${it.zip ?? '?'} ${it.place ?? ''}`);
+          } else {
+            try {
+              const r = await api<{ relevant: number; new: number; needSeller: { source: BuySource; id: string; url: string }[]; alerts?: number }>('POST', '/api/ingest/buy', payload);
+              log(`   ✅ ${items.length} lidos · ${r.relevant} relevantes · ${r.new} novos${r.needSeller.length ? ` · ${r.needSeller.length} a verificar vendedor` : ''}${r.alerts && r.alerts > 0 ? ` · 🔔 ${r.alerts} alerta(s)` : ''}`);
+              deals += r.needSeller.length;
+              if (r.needSeller.length) await checkSellers(session, r.needSeller);
+            } catch (e) {
+              if ((e as any)?.fatal) throw e;
+              queueOffline('buy', payload);
+            }
+          }
+          await sleep(jitter(CFG.delayMs));
+        }
+      }
+    }
+  } finally {
+    await session.close();
+  }
+  log(`🛒 Compra terminada${deals ? ` · ${deals} oportunidade(s) com vendedor verificado` : ''}.`);
+}
+
 // ───────────────────────────── modo diagnóstico ─────────────────────────────
 
 async function inspect(term: string) {
   const session = new BrowserSession();
   try {
+    // --inspect "tutti:iphone 15 pro"  ou  --inspect https://www.tutti.ch/de/vi/123
+    const buyUrl = term.match(/^https?:\/\/(?:www\.)?(tutti|anibis)\.ch\/.*?(\d{5,})\/?$/);
+    const buyTerm = term.match(/^(tutti|anibis):(.+)$/);
+    if (buyUrl || buyTerm) {
+      const source = (buyUrl?.[1] ?? buyTerm![1]) as BuySource;
+      if (!isBuySource(source)) return;
+      const url = buyUrl ? term : classifiedSearchUrl(source, buyTerm![2]);
+      log(`🧪 Diagnóstico ${BUY_SOURCES[source].label} → ${url}`);
+      const res = await load(session, url, buyUrl ? false : TUTTI_CARDS);
+      fs.mkdirSync(CFG.debugDir, { recursive: true });
+      const f = path.join(CFG.debugDir, `inspect-${source}-${(buyUrl?.[2] ?? buyTerm![2]).replace(/\W+/g, '_')}.html`);
+      fs.writeFileSync(f, res.html);
+      log(`HTTP ${res.status} · bloqueio: ${res.challenge ? 'SIM' : 'não'} · ${Math.round(res.html.length / 1024)} KB → ${path.relative(ROOT, f)}`);
+      if (buyUrl) { console.log(parseClassifiedDetail(buyUrl[2], res.html, res.status)); return; }
+      const parsed = parseClassifiedSearch(res.html, source);
+      log(`Fontes: json=${parsed.sources.json} cards=${parsed.sources.html} → ${parsed.items.length} anúncios`);
+      const product = activeProducts().find((p) => checkRelevance(buyTerm![2], '', p).relevant) ?? activeProducts()[0];
+      for (const it of parsed.items.slice(0, 15)) {
+        const rel = checkRelevance(it.title, it.url, product);
+        console.log(`  ${rel.relevant ? '✔' : '✘'} CHF ${String(it.price ?? '—').padStart(6)} | ${(it.zip ?? '????')} ${(it.place ?? '').slice(0, 14).padEnd(14)} | ${it.postedAt?.slice(0, 16) ?? '—'} | ${it.title.slice(0, 45)}${rel.reason ? `  ← ${rel.reason}` : ''}`);
+      }
+      return;
+    }
     // --inspect https://www.ricardo.ch/de/a/...  → diagnóstico da página de UM anúncio
     if (/^https?:\/\//.test(term)) {
       const id = term.match(/-(\d{6,})\/?/)?.[1] ?? 'x';
@@ -520,7 +673,7 @@ async function cycle() {
       await session.close();
       await sleep(jitter(CFG.delayMs));
     }
-    for (const [i, p] of products.entries()) {
+    for (const [i, p] of (CFG.buyOnly ? [] : products).entries()) {
       if (consecutiveBlocks >= 3) {
         warn('3 bloqueios seguidos — pausa de 10 min antes de continuar.');
         await session.close();
@@ -532,6 +685,11 @@ async function cycle() {
     }
   } finally {
     await session.close();
+  }
+
+  if (CFG.buy) {
+    consecutiveBlocks = 0;
+    try { await buyPhase(); } catch (e) { if ((e as any)?.fatal) throw e; warn(`Tutti/Anibis: ${(e as Error).message}`); }
   }
 
   console.log('\n┌──────────────────────────────── Resumo ────────────────────────────────');

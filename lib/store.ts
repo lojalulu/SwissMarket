@@ -6,7 +6,8 @@ import fs from 'fs';
 import path from 'path';
 import { getProduct, type ProductConfig } from '../config/products';
 import { checkRelevance } from './text';
-import type { DetailSignals, IngestPayload, ListingRecord, ProductRun, ScrapedListing } from './types';
+import type { BuyRecord, DetailSignals, IngestPayload, ListingRecord, ProductRun, ScrapedListing } from './types';
+import type { DriveInfo } from './geo';
 
 interface DB {
   version: 2;
@@ -15,6 +16,18 @@ interface DB {
   listings: Record<string, ListingRecord & { missedRuns?: number }>;
   /** Alertas já enviados (anti-spam): chave → quando e a que preço. */
   alerts?: Record<string, { at: string; price: number }>;
+  /** Lado da compra: anúncios Tutti/Anibis. chave = `${source}:${productId}:${id}` */
+  buy?: Record<string, BuyRecord>;
+  /** Cache de tempos de carro por código postal. */
+  geo?: Record<string, DriveInfo & { at: string }>;
+}
+
+/** Acesso à base para outros módulos (lib/buy.ts). `write` grava no fim. */
+export function withDb<T>(fn: (db: DB) => T, write = false): T {
+  const db = load();
+  const out = fn(db);
+  if (write) save(db);
+  return out;
 }
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');

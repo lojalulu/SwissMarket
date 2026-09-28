@@ -47,6 +47,25 @@ Respeita o `robots.txt` do Ricardo: só abre `/de/s/<termo>/` (sem `?`) e págin
 
 Teste dos alertas: `http://IP:3000/api/alerts/test?token=SEU_TOKEN`
 
+## Comprar no Tutti / Anibis e revender no Ricardo (v3.4)
+
+Depois de cada volta no Ricardo, o robô lê a 1ª página (os mais recentes) do **Tutti** para cada produto que já tem
+"comprar até". A VPS compara cada anúncio com o preço de revenda no Ricardo:
+
+- **Comprar já**: preço + viagem ≤ "comprar até" · **Negociar**: até 25 % acima → sugere a proposta (já sem a viagem)
+- **Carro a partir de Bern** (raio `MAX_DRIVE_MIN`, padrão 40 min) e **no caminho do trabalho** (Bern → Interlaken, desvio ≤ 12 min).
+  Tempos reais de estrada via OSRM (1 pedido por código postal, guardado em cache); sem OSRM, estimativa calibrada (±5 min).
+- **Viagem**: km × 2 × `TRAVEL_CHF_PER_KM` (0,25), ou só o desvio quando é no caminho — descontada do lucro.
+- **Vendedor**: para as oportunidades dentro do raio, o robô abre o anúncio e lê o perfil (nome, "membro desde",
+  verificado). `BUY_REQUIRE_PROFILE=1` → só alerta perfis visíveis.
+- **Alertas** ntfy/Telegram só dentro do raio, com revenda baseada em vendas reais e preço que não seja "bom demais".
+- **Facebook Marketplace**: não é lido automaticamente (exige conta e as regras da Meta proíbem recolha automática).
+  Na aba *Tutti* há o **avaliador**: cole título, preço e local → produto, lucro, carro e checklist de segurança.
+- Anibis: `BUY_SOURCES=tutti,anibis` na VPS (o Anibis usa a mesma plataforma; ative se tiver anúncios diferentes).
+
+Robots.txt do Tutti/Anibis: pesquisa (`/de/q/…`) e anúncios (`/de/vi/…`) permitidos; `/api/`, contas e mensagens não — o robô não entra em contas nem envia mensagens.
+Coordenadas dos códigos postais: [GeoNames](https://www.geonames.org) (CC BY 4.0), em `config/ch-plz.json`.
+
 ## Instalação
 
 ### 1. VPS
@@ -127,6 +146,11 @@ Depois corra `--inspect "ipad air m2"` para ver o que é aceite (✔) ou rejeita
 | `POST /api/ingest` 🔒 | anúncios de uma pesquisa (o antigo `/api/scrape` continua a funcionar) |
 | `GET /api/recheck?limit=25` 🔒 | anúncios que o runner deve reabrir |
 | `POST /api/ingest/details` 🔒 | resultado da verificação |
+| `GET /api/buy[?productId=][&all=1]` | oportunidades Tutti/Anibis (lucro, carro, vendedor) |
+| `GET /api/buy/targets` 🔒 | produtos e fontes que o runner deve procurar no Tutti/Anibis |
+| `POST /api/ingest/buy` 🔒 | anúncios de uma pesquisa Tutti/Anibis → devolve os vendedores a verificar |
+| `POST /api/ingest/buy-details` 🔒 | perfil do vendedor / anúncio apagado |
+| `POST /api/evaluate` | avaliação manual `{title, price, place}` (Facebook Marketplace…) |
 
 🔒 = exige o cabeçalho `x-ingest-token`.
 

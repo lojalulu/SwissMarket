@@ -6,9 +6,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   ArrowDownWideNarrow, Bell, BellOff, Check, ChevronDown, Copy, ExternalLink, Gavel, HeartHandshake as Handshake, Info, Loader2, MapPin, Radar,
-  RefreshCw, ShoppingBag, Tag, Timer, TrendingUp, Trophy, Zap,
+  RefreshCw, ShoppingBag, ShoppingCart, Tag, Timer, TrendingUp, Trophy, Zap,
 } from "lucide-react";
 import type { ProductStats } from "@/lib/stats";
+import BuyView from "./BuyView";
 
 type SortKey = "liquidez" | "lucro" | "nome";
 
@@ -42,7 +43,7 @@ const BASIS = {
   sem_dados: "sem dados",
 } as const;
 
-type Tab = "radar" | "produtos" | "ranking";
+type Tab = "radar" | "comprar" | "produtos" | "ranking";
 type RadarKind = "todos" | "buynow" | "auction" | "offer";
 type Opp = ProductStats["opportunities"][number] & { product: string; productId: string; confidence: string; resale: number | null; basis: string };
 
@@ -97,7 +98,7 @@ export default function Page() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-white">SwissMarket Pulse</h1>
           <p className="text-sm text-slate-400">
-            Ricardo.ch · última recolha {ago(lastRun)} · {products.length} produtos ·{" "}
+            Ricardo.ch + Tutti · última recolha {ago(lastRun)} · {products.length} produtos ·{" "}
             <span className={alertsOn ? "text-emerald-300" : "text-slate-500"}>
               {alertsOn ? <><Bell className="inline h-3.5 w-3.5" /> alertas ligados</> : <><BellOff className="inline h-3.5 w-3.5" /> alertas desligados</>}
             </span>
@@ -114,14 +115,15 @@ export default function Page() {
         </div>
       </header>
 
-      <nav className="mb-5 grid grid-cols-3 gap-1 rounded-xl bg-slate-900/70 p-1 ring-1 ring-white/10">
+      <nav className="mb-5 grid grid-cols-4 gap-1 rounded-xl bg-slate-900/70 p-1 ring-1 ring-white/10">
         {([
           ["radar", <><Radar className="mr-1 inline h-4 w-4" />Radar{opps.length ? ` (${opps.length})` : ""}</>],
+          ["comprar", <><ShoppingCart className="mr-1 inline h-4 w-4" />Tutti</>],
           ["produtos", <><ShoppingBag className="mr-1 inline h-4 w-4" />Produtos</>],
           ["ranking", <><Trophy className="mr-1 inline h-4 w-4" />Ranking</>],
         ] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
-            className={`rounded-lg py-2 text-sm ${tab === k ? "bg-emerald-500/15 font-semibold text-emerald-200 ring-1 ring-emerald-400/30" : "text-slate-300"}`}>
+            className={`rounded-lg py-2 text-xs sm:text-sm ${tab === k ? "bg-emerald-500/15 font-semibold text-emerald-200 ring-1 ring-emerald-400/30" : "text-slate-300"}`}>
             {label}
           </button>
         ))}
@@ -136,6 +138,7 @@ export default function Page() {
       )}
 
       {tab === "radar" && <RadarView opps={opps} />}
+      {tab === "comprar" && <BuyView products={products.map((p) => ({ productId: p.productId, name: p.name }))} />}
       {tab === "ranking" && <Ranking products={products} onOpen={(id) => { setTab("produtos"); setOpen(id); }} />}
       {tab === "produtos" && (
         <>

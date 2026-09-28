@@ -10,6 +10,7 @@
 import { getProduct } from '../config/products';
 import { computeProductStats, type Opportunity, type ProductStats } from './stats';
 import { effectiveRecords, markAlerted, runsFor, shouldAlert } from './store';
+import { buyDeals, type BuyDeal } from './buy';
 
 const env = (k: string) => (process.env[k] ?? '').trim();
 
@@ -66,7 +67,7 @@ async function sendNtfy(title: string, body: string, tags: string[], priority: n
 
 async function sendTelegram(title: string, body: string, click?: string) {
   const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const text = `<b>${esc(title)}</b>\n${esc(body)}${click ? `\n<a href="${click}">Abrir no Ricardo</a>` : ''}`;
+  const text = `<b>${esc(title)}</b>\n${esc(body)}${click ? `\n<a href="${click}">Abrir anúncio</a>` : ''}`;
   const res = await fetch(`https://api.telegram.org/bot${env('TELEGRAM_BOT_TOKEN')}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -108,6 +109,65 @@ export async function runAlertsFor(productId: string, now = new Date()): Promise
     const m = formatAlert(o, stats);
     const r = await sendMessage(m.title, m.body, { tags: m.tags, priority: m.priority, click: o.url });
     if (r.errors.length < r.channels.length) sent.push({ key: `${o.kind}:${p.id}:${o.id}`, price: o.cost });
+    else console.error('[alerts] falha:', r.errors.join('; '));
+  }
+  markAlerted(sent, now);
+  return sent.length;
+}
+
+// ───────────────────────────── lado da compra (Tutti / Anibis) ─────────────────────────────
+
+
+function sellerLine(d: BuyDeal): string {
+  const s = d.seller;
+  if (!d.sellerChecked && !s?.name) return '👤 perfil ainda não verificado — confira antes de combinar';
+  if (d.trust === 'desconhecido') return '👤 ⚠️ perfil NÃO visível — cuidado';
+  const bits = [s?.name, s?.memberSince ? `membro desde ${s.memberSince}` : null, s?.verified ? 'verificado' : null,
+    s?.company ? 'empresa' : null, s?.listings ? `${s.listings} anúncios` : null].filter(Boolean);
+  return `👤 ${bits.join(' · ')}`;
+}
+
+export function formatBuyAlert(d: BuyDeal): { title: string; body: string; tags: string[]; priority: number } {
+  const src = d.source === 'tutti' ? 'Tutti' : 'Anibis';
+  const where = d.drive
+    ? `📍 ${d.drive.place} · 🚗 ${d.drive.minutes} min${d.onRoute ? ` · no caminho do trabalho (+${d.drive.detourMin} min)` : ''}${d.drive.via === 'estimate' ? ' (estimado)' : ''}`
+    : '📍 local desconhecido';
+  const conf = d.confidence === 'baixa' ? ' · ⚠️ confiança baixa' : '';
+  const head = d.kind === 'comprar'
+    ? `🟢 ${src}: ${d.productName} ${chf(d.price)} — lucro ≈ ${chf(d.profit)}`
+    : `🤝 ${src}: ${d.productName} — proponha ${chf(d.offer ?? 0)} (pedem ${chf(d.price)})`;
+  return {
+    title: head,
+    body: `Revende no Ricardo a ~${chf(d.resale)} · comprar até ${chf(d.maxBuy)} · viagem ${chf(d.travel?.chf ?? 0)}${conf}\n${where}\n${sellerLine(d)}\n${d.title}`,
+    tags: [d.kind === 'comprar' ? 'green_circle' : 'handshake'],
+    priority: d.kind === 'comprar' && d.score >= 60 ? 5 : 4,
+  };
+}
+
+/**
+ * Alerta as oportunidades novas do Tutti/Anibis: dentro do raio (MAX_DRIVE_MIN, padrão 40 min), preço de revenda
+ * baseado em vendas reais, não "bom demais". Espera pelo perfil do vendedor (máx. 10 min) para o alerta já o mostrar.
+ * BUY_REQUIRE_PROFILE=1 → só alerta vendedores com perfil visível (nome + "membro desde").
+ * BUY_ALERT_NEGOTIATE=0 → sem alertas de "negociar".
+ */
+export async function runBuyAlerts(productId?: string, now = new Date()): Promise<number> {
+  if (!alertChannels().length) return 0;
+  const allowAsking = env('ALERT_ALLOW_ASKING') === '1';
+  const requireProfile = env('BUY_REQUIRE_PROFILE') === '1';
+  const negotiate = env('BUY_ALERT_NEGOTIATE') !== '0';
+  const deals = buyDeals({ productId }, now)
+    .filter((d) => d.withinRadius && !d.suspicious && d.status === 'active')
+    .filter((d) => allowAsking || d.basis !== 'pedidos')
+    .filter((d) => d.kind === 'comprar' || (negotiate && d.kind === 'negociar' && d.price <= d.maxBuy * 1.15))
+    .filter((d) => d.sellerChecked || now.getTime() - Date.parse(d.firstSeen) > 10 * 60e3 || !!d.seller?.memberSince)
+    .filter((d) => !requireProfile || d.trust === 'visivel')
+    .filter((d) => shouldAlert(`buy:${d.source}:${d.id}`, d.price, now))
+    .slice(0, 5);
+  const sent: { key: string; price: number }[] = [];
+  for (const d of deals) {
+    const m = formatBuyAlert(d);
+    const r = await sendMessage(m.title, m.body, { tags: m.tags, priority: m.priority, click: d.url });
+    if (r.errors.length < r.channels.length) sent.push({ key: `buy:${d.source}:${d.id}`, price: d.price });
     else console.error('[alerts] falha:', r.errors.join('; '));
   }
   markAlerted(sent, now);

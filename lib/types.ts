@@ -113,3 +113,39 @@ export interface ProductRun {
   relevant: number;
   complete: boolean;
 }
+
+// ───────────────────────── lado da COMPRA (Tutti / Anibis) ─────────────────────────
+import type { BuySource, ClassifiedDetail, ClassifiedListing, ClassifiedSeller } from './classifieds';
+
+/** Corpo do POST /api/ingest/buy. */
+export interface BuyIngestPayload {
+  source: BuySource;
+  productId: string;
+  scrapedAt: string;
+  items: ClassifiedListing[];
+  runnerVersion?: string;
+}
+
+/** Resultado de abrir o anúncio (vendedor) — POST /api/ingest/buy-details. */
+export interface BuyDetailResult {
+  source: BuySource;
+  id: string;
+  detail: ClassifiedDetail | null;
+  /** true = não deu para abrir (bloqueio, erro). */
+  failed?: boolean;
+}
+
+export interface BuyRecord extends ClassifiedListing {
+  productId: string;
+  relevant: boolean;
+  rejectReason?: string;
+  firstSeen: string;
+  lastSeen: string;
+  seenCount: number;
+  /** active = à venda · gone = o anúncio já não existe (vendido/apagado). */
+  status: 'active' | 'gone';
+  priceHistory: { at: string; price: number | null }[];
+  seller?: ClassifiedSeller | null;
+  sellerCheckedAt?: string | null;
+  sellerCheckFailed?: boolean;
+}
