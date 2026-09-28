@@ -573,10 +573,11 @@ async function main() {
   await test('defeitos na descrição: "Display kaputt" ✘ · "keine Risse" ✔ · "nicht defekt" ✔', () => {
     const { findDefect } = require('../lib/text') as typeof import('../lib/text');
     for (const t of ['iPhone 15 Pro Display kaputt', 'Face ID funktioniert nicht', 'Rückseite gebrochen, sonst ok', 'Glas hat einen Riss', 'iCloud gesperrt',
-      'écran cassé', 'schermo rotto', 'kein Face ID', 'Displayschaden unten links', 'screen cracked'])
+      'écran cassé', 'schermo rotto', 'kein Face ID', 'Displayschaden unten links', 'screen cracked',
+      'Rückseite leicht beschädigt', 'kleine Mängel am Rahmen', 'Akku Service nötig', 'grüne Linie im Display'])
       assert.ok(findDefect(t), `devia detetar: ${t}`);
     for (const t of ['Wie neu, keine Kratzer, keine Dellen, keine Risse', 'nicht defekt, funktioniert einwandfrei', 'ohne Wasserschaden', 'Akku 91%, top Zustand',
-      'Ursprungsland Schweiz', 'keine sichtbaren Risse'])
+      'Ursprungsland Schweiz', 'keine sichtbaren Risse', 'Hülle schützt vor Schäden', 'keine Mängel', 'no damage'])
       assert.equal(findDefect(t), null, `não devia detetar: ${t}`);
   });
 
@@ -708,6 +709,12 @@ async function main() {
     assert.equal(after.trust, 'visivel');
     assert.equal(after.sellerChecked, true);
     assert.ok(!buy.needSellerCheck('tutti', 'iphone-15-pro', 6, now).some((n) => n.id === '83200001'));
+    // anúncio verificado por um runner antigo (sem campo "defect") → volta a ser aberto para ler a descrição
+    const { defect: _d, ...oldDetail } = parseClassifiedDetail('83200001', fx('tutti-detail.html'));
+    store.withDb((db) => { delete db.buy!['tutti:iphone-15-pro:83200001'].defectChecked; }, false);
+    buy.applyBuyDetails([{ source: 'tutti', id: '83200001', detail: oldDetail as any }], now);
+    assert.ok(buy.needSellerCheck('tutti', 'iphone-15-pro', 6, now).some((n) => n.id === '83200001'), 'deve reabrir');
+    buy.applyBuyDetails([{ source: 'tutti', id: '83200001', detail: parseClassifiedDetail('83200001', fx('tutti-detail.html')) }], now);
     const { formatBuyAlert } = await import('../lib/alerts');
     const msg = formatBuyAlert(after);
     assert.match(msg.title, /Tutti: iPhone 15 Pro/);

@@ -123,6 +123,8 @@ export function applyBuyDetails(results: BuyDetailResult[], now = new Date()) {
         if (r.failed || !r.detail) { rec.sellerCheckFailed = true; out.failed++; continue; }
         rec.sellerCheckFailed = false;
         if (r.detail.active === false) { rec.status = 'gone'; out.gone++; continue; }
+        // Runner ≥ v3.5 envia sempre o campo "defect" (mesmo null) → descrição completa verificada.
+        if ('defect' in r.detail) rec.defectChecked = true;
         if (r.detail.defect) { rec.defect = r.detail.defect; rec.relevant = false; rec.rejectReason = `defeito: ${r.detail.defect}`; }
         const s = r.detail.seller;
         if (s && (s.name || s.memberSince)) rec.seller = { ...(rec.seller ?? {}), ...Object.fromEntries(Object.entries(s).filter(([, v]) => v !== null)) } as ClassifiedSeller;
@@ -263,7 +265,8 @@ export function buyDeals(opts: { productId?: string; includeGone?: boolean; maxA
 export function needSellerCheck(source: BuySource, productId: string, max = 6, now = new Date()) {
   return buyDeals({ productId }, now)
     .filter((d) => d.source === source && d.withinRadius && !d.suspicious)
-    .filter((d) => withDb((db) => !db.buy?.[d.key]?.sellerCheckedAt))
+    // Abre de novo os anúncios verificados antes do filtro de defeitos (sem descrição completa lida).
+    .filter((d) => withDb((db) => { const r = db.buy?.[d.key]; return !r?.sellerCheckedAt || !r.defectChecked; }))
     .slice(0, max)
     .map((d) => ({ source: d.source, id: d.id, url: d.url, productId: d.productId }));
 }

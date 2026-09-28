@@ -107,8 +107,12 @@ const DEFECT_TERMS = [
   'icloud gesperrt', 'icloud lock', 'aktivierungssperre', 'gesperrt', 'blacklist', 'blacklisted', 'mdm',
   'kein face id', 'ohne face id', 'face id defekt', 'face id geht nicht', 'face id funktioniert nicht', 'touch id defekt',
   'akku defekt', 'akku kaputt', 'verbogen', 'bent', 'geht nicht an', 'ghost touch', 'burn in', 'eingebrannt', 'pixelfehler',
+  'beschädigt', 'beschaedigt', 'beschädigte', 'beschädigtes', 'beschädigung', 'schaden', 'schäden', 'mangel', 'mängel', 'maengel',
+  'akku service', 'batterie service', 'akku muss', 'akku ersetzen', 'nicht funktionsfähig', 'funktioniert teilweise', 'teilweise defekt',
+  'dead pixel', 'tote pixel', 'streifen im display', 'linien im display', 'grüne linie', 'grüner strich', 'lines on screen', 'flackert',
+  'face id nicht', 'face id geht nicht mehr', 'ohne funktion', 'damaged', 'damage', 'endommagé', 'endommage', 'danneggiato', 'difetto', 'difettoso',
 ];
-const NEGATIONS = new Set(['kein', 'keine', 'keinen', 'keiner', 'keines', 'ohne', 'nicht', 'nie', 'no', 'not', 'without', 'sans', 'aucun', 'aucune', 'pas', 'senza', 'nessun', 'nessuna', 'null', '0', 'zero']);
+const NEGATIONS = new Set(['vor', 'gegen', 'kein', 'keine', 'keinen', 'keiner', 'keines', 'ohne', 'nicht', 'nie', 'no', 'not', 'without', 'sans', 'aucun', 'aucune', 'pas', 'senza', 'nessun', 'nessuna', 'null', '0', 'zero']);
 const DEFECT_NORM = [...new Set(DEFECT_TERMS.map(normalize))].filter(Boolean);
 
 /**
