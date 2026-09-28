@@ -38,7 +38,7 @@ const CONF = {
 
 const BASIS = {
   vendidos: "vendas confirmadas",
-  misto: "vendas + leilões com ≥3 lances a <24 h do fim",
+  misto: "vendas + leilões com ≥3 lances a <3 h do fim",
   pedidos: "preços pedidos −10 % (ainda sem vendas)",
   sem_dados: "sem dados",
 } as const;
@@ -451,7 +451,7 @@ function Details({ p }: { p: ProductStats }) {
         <tbody className="text-slate-200">
           {([
             [<><TrendingUp className="mr-1 inline h-3.5 w-3.5 text-emerald-300" />Vendidos</>, p.sold],
-            [<><Gavel className="mr-1 inline h-3.5 w-3.5 text-sky-300" />Leilões ≥3 lances (fim em 24 h)</>, p.active.auctionBids],
+            [<><Gavel className="mr-1 inline h-3.5 w-3.5 text-sky-300" />Leilões ≥3 lances (fim em 3 h)</>, p.active.auctionBids],
             [<><Tag className="mr-1 inline h-3.5 w-3.5 text-orange-300" />Sofort pedidos</>, p.active.askingBuyNow],
             [<><Zap className="mr-1 inline h-3.5 w-3.5 text-violet-300" />Sofort vendidos (prováveis)</>, p.probableBuyNow],
           ] as const).map(([label, d], i) => (

@@ -298,9 +298,9 @@ export function computeProductStats(
   const fresh = active.filter((r) => new Date(r.lastSeen).getTime() >= freshCut);
   const asking = fresh.map((r) => r.buyNowPrice).filter(inBand) as number[];
   const auctions = fresh.filter((r) => r.mode !== 'buynow');
-  // Só leilões a menos de 24 h do fim: antes disso o lance atual ainda está muito abaixo do preço final.
-  const endsWithin24h = (r: ListingRecord) => !r.endDate || new Date(r.endDate).getTime() - nowMs < DAY;
-  const hotBids = auctions.filter((r) => r.bids >= 3 && endsWithin24h(r)).map((r) => r.bidPrice).filter(inBand) as number[];
+  // Só leilões disputados a ≤ 3 h do fim: o lance atual ainda fica ABAIXO do preço final, mas já perto.
+  const endsSoon = (r: ListingRecord) => !!r.endDate && new Date(r.endDate).getTime() - nowMs < 3 * 3600e3;
+  const hotBids = auctions.filter((r) => r.bids >= 3 && endsSoon(r)).map((r) => r.bidPrice).filter(inBand) as number[];
   const auctionsWithBidsPct = auctions.length >= 3 ? Math.round((auctions.filter((r) => r.bids > 0).length / auctions.length) * 100) : null;
   const avgBids = auctions.length >= 3 ? r2(auctions.reduce((a, r) => a + r.bids, 0) / auctions.length) : null;
 
@@ -407,6 +407,12 @@ export function computeProductStats(
   if (soldDist.n >= 5) {
     basis = 'vendidos';
     confidence = soldDist.n >= 10 ? 'alta' : 'media';
+    median = soldDist.median;
+    quick = (soldDist.p25! + soldDist.median!) / 2;
+  } else if (soldDist.n >= 3) {
+    // 3–4 vendas reais: usa só as vendas (lances ainda a decorrer puxariam o preço para baixo).
+    basis = 'vendidos';
+    confidence = 'baixa';
     median = soldDist.median;
     quick = (soldDist.p25! + soldDist.median!) / 2;
   } else if (soldDist.n + hotBids.length >= 3) {

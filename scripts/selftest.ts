@@ -445,6 +445,23 @@ async function main() {
     assert.equal(store.effectiveRecords('iphone-13').find((r) => r.id === '1399000003')!.status, 'gone');
   });
 
+  await test('3 vendas reais: revenda usa só as vendas (lances a decorrer não puxam para baixo)', () => {
+    const t = new Date('2026-09-28T12:00:00Z');
+    const mk = (id: string, o: Partial<import('../lib/types').ListingRecord>): import('../lib/types').ListingRecord => ({
+      id, productId: 'iphone-13', title: `iPhone 13 ${id}`, url: `https://www.ricardo.ch/de/a/x-${id}/`, mode: 'auction',
+      bidPrice: null, buyNowPrice: null, bids: 0, endDate: '2026-10-05T10:00:00Z', condition: null, relevant: true,
+      firstSeen: '2026-09-25T10:00:00Z', lastSeen: t.toISOString(), seenCount: 3, history: [], status: 'active',
+      finalPrice: null, soldVia: null, soldEvidence: null, closedAt: null, checkAttempts: 0, lastCheckAt: null, ...o,
+    });
+    const sold = [160, 172, 181].map((v, i) => mk(`s${i}`, { status: 'sold', finalPrice: v, soldEvidence: 'inferred', soldVia: 'auction', bids: 12, closedAt: `2026-09-2${6 + i}T19:00:00Z`, endDate: `2026-09-2${6 + i}T19:00:00Z` }));
+    const live = [90, 100, 110, 120].map((v, i) => mk(`l${i}`, { bidPrice: v, bids: 6, endDate: '2026-09-28T13:00:00Z' }));
+    const runs = [{ at: '2026-09-25T10:00:00Z', found: 60, relevant: 40, complete: true }, { at: t.toISOString(), found: 60, relevant: 40, complete: true }];
+    const st = computeProductStats(iphone, [...sold, ...live], runs, t, 30);
+    assert.equal(st.pricing.basis, 'vendidos');
+    assert.equal(st.pricing.confidence, 'baixa');
+    assert.ok(st.pricing.resaleQuick! >= 160, `revenda ${st.pricing.resaleQuick}`);
+  });
+
   console.log('\nTutti / Anibis (lado da compra)');
   const { parseClassifiedSearch, parseClassifiedDetail, sellerTrust, parsePosted } = await import('../lib/classifieds');
   const geo = await import('../lib/geo');
